@@ -293,7 +293,8 @@ local function conductor_tick()
       if hints.suppress then for _, sp in ipairs(hints.suppress) do if sp == pname then suppress = true end end end
 
       if not suppress then
-        local delta = (math.random() * 2 - 1) * pdef.sensitivity * 0.1 + bias * 0.1
+        local base_scale = pdef.group == "matrix" and 0.3 or (pdef.group == "modulation" and 0.25 or 0.1)
+        local delta = (math.random() * 2 - 1) * pdef.sensitivity * base_scale + bias * base_scale
         if pdef.direction == "up" then delta = math.abs(delta)
         elseif pdef.direction == "down" then delta = -math.abs(delta) end
         delta = delta * ({0.4, 1.0, 1.8})[robot.personality]
@@ -301,15 +302,25 @@ local function conductor_tick()
         -- route to the right target
         local mat_src, mat_dst = pname:match("^matrix_(%d)_(%d)$")
         if mat_src then
-          -- matrix routing cell
+          -- matrix routing: BIG moves — this is patching cables, not tweaking knobs
           local s, d = tonumber(mat_src), tonumber(mat_dst)
-          matrix[s][d] = util.clamp(matrix[s][d] + delta * 0.5, -1, 1)
+          -- sometimes slam a route fully on or off (cable in / cable out)
+          if math.random() < 0.15 * ({0.5, 1.0, 1.5})[robot.personality] then
+            -- radical: set to a strong value or zero
+            if math.random() < 0.4 then
+              matrix[s][d] = 0  -- unplug
+            else
+              matrix[s][d] = (math.random() * 2 - 1) * (0.5 + math.random() * 0.5) -- plug in hard
+            end
+          else
+            -- drift: still much bigger than other params
+            matrix[s][d] = util.clamp(matrix[s][d] + delta * 4, -1, 1)
+          end
         elseif pname == "chaos_coeff" then
-          chaos:drift(delta * 0.3)
+          chaos:drift(delta * 0.8)
         elseif pname:match("^lfo_shape") then
-          -- shape: random switch (delta doesn't make sense for discrete)
           local which = tonumber(pname:match("lfo_shape_(%d)"))
-          if which and math.random() < 0.15 then
+          if which and math.random() < 0.25 then
             lfo.shape[which] = math.random(1, 4)
             params:set("lfo_shape_" .. which, lfo.shape[which])
           end
