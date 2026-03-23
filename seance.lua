@@ -85,6 +85,30 @@ local PLAY_PARAMS = {"SPIRIT", "FILTER", "CHAOS", "VERB ROOM", "PORTAMENTO"}
 local SEQ_PARAMS = {"step pitch", "length", "direction", "division", "root note", "scale"}
 local ROBOT_PARAMS = {"mindset", "personality"}
 
+-- matrix flat list: 7 source params + 20 routing cells = 27 items
+-- items 1-7: LFO1 rate, LFO1 shape, LFO2 rate, LFO2 shape, LFO3 rate, LFO3 shape, S&H chaos
+-- items 8-27: routing cells [src][dst] in row-major order
+local MAT_ITEM_COUNT = 7 + 4 * 5
+
+local function mat_item_info(idx)
+  -- returns: {type, label, value_string} for display
+  if idx == 1 then return "lfo_rate", "LFO1 rate", string.format("%.2f hz", lfo.rate[1])
+  elseif idx == 2 then return "lfo_shape", "LFO1 shape", SHAPE_NAMES[lfo.shape[1]]
+  elseif idx == 3 then return "lfo_rate", "LFO2 rate", string.format("%.2f hz", lfo.rate[2])
+  elseif idx == 4 then return "lfo_shape", "LFO2 shape", SHAPE_NAMES[lfo.shape[2]]
+  elseif idx == 5 then return "lfo_rate", "LFO3 rate", string.format("%.2f hz", lfo.rate[3])
+  elseif idx == 6 then return "lfo_shape", "LFO3 shape", SHAPE_NAMES[lfo.shape[3]]
+  elseif idx == 7 then return "chaos", "S&H chaos", string.format("x=%.2f", chaos.coeff_x)
+  else
+    -- routing cell
+    local cell = idx - 7
+    local src = math.ceil(cell / 5)
+    local dst = ((cell - 1) % 5) + 1
+    local v = matrix[src][dst]
+    return "route", MOD_SRC[src] .. ">" .. MOD_DST[dst], string.format("%+.2f", v)
+  end
+end
+
 -- macros (0-1)
 local macro = {spirit = 0.4, filter = 0.3, chaos = 0.2}
 
@@ -463,19 +487,35 @@ end
 local function setup_params()
   params:add_separator("SEANCE")
 
-  params:add_group("tape_grp", "TAPE (Mellotron)", 5)
+  -- MACROS
+  params:add_group("macro_grp", "MACROS", 3)
+  params:add_control("macro_spirit", "spirit (tape/moog)",
+    controlspec.new(0, 1, 'lin', 0.01, 0.4))
+  params:set_action("macro_spirit", function(v) macro.spirit = v; apply_spirit() end)
+  params:add_control("macro_filter", "filter sweep",
+    controlspec.new(0, 1, 'lin', 0.01, 0.3))
+  params:set_action("macro_filter", function(v) macro.filter = v; apply_filter() end)
+  params:add_control("macro_chaos", "chaos",
+    controlspec.new(0, 1, 'lin', 0.01, 0.2))
+  params:set_action("macro_chaos", function(v) macro.chaos = v; apply_chaos_macro() end)
+
+  -- TAPE
+  params:add_group("tape_grp", "TAPE (Mellotron)", 6)
+  params:add_option("tape_voice", "voice", {"strings", "flutes", "choir"}, 1)
+  params:set_action("tape_voice", function(v) engine.tape_voice_type(v - 1) end)
   params:add_control("tape_warble", "warble", controlspec.new(0, 1, 'lin', 0.01, 0.3))
   params:set_action("tape_warble", function(v) engine.tape_warble(v) end)
+  params:add_control("tape_tone", "tone", controlspec.new(100, 12000, 'exp', 1, 2000, "hz"))
+  params:set_action("tape_tone", function(v) engine.tape_tone(v) end)
   params:add_control("tape_attack", "attack", controlspec.new(0.005, 2, 'exp', 0, 0.08, "s"))
   params:set_action("tape_attack", function(v) engine.tape_attack(v) end)
   params:add_control("tape_release", "release", controlspec.new(0.05, 8, 'exp', 0, 1.2, "s"))
   params:set_action("tape_release", function(v) engine.tape_release(v) end)
   params:add_control("tape_level", "level", controlspec.new(0, 1, 'lin', 0.01, 0.6))
   params:set_action("tape_level", function(v) engine.tape_level(v) end)
-  params:add_control("tape_tone", "tone", controlspec.new(100, 12000, 'exp', 1, 2000, "hz"))
-  params:set_action("tape_tone", function(v) engine.tape_tone(v) end)
 
-  params:add_group("moog_grp", "MOOG (MiniMoog)", 7)
+  -- MOOG
+  params:add_group("moog_grp", "MOOG (MiniMoog)", 9)
   params:add_control("moog_cutoff", "cutoff", controlspec.new(20, 18000, 'exp', 1, 1200, "hz"))
   params:set_action("moog_cutoff", function(v) engine.moog_cutoff(v) end)
   params:add_control("moog_res", "resonance", controlspec.new(0, 3.5, 'lin', 0.01, 0.3))
@@ -484,13 +524,18 @@ local function setup_params()
   params:set_action("moog_porta", function(v) engine.moog_porta(v) end)
   params:add_control("moog_pw", "pulse width", controlspec.new(0.05, 0.95, 'lin', 0.01, 0.5))
   params:set_action("moog_pw", function(v) engine.moog_pw(v) end)
+  params:add_control("moog_f_env", "filter env amt", controlspec.new(0, 8000, 'lin', 1, 2000, "hz"))
+  params:set_action("moog_f_env", function(v) engine.moog_f_env(v) end)
   params:add_control("moog_osc1", "osc 1 (saw)", controlspec.new(0, 1, 'lin', 0.01, 1.0))
   params:set_action("moog_osc1", function() engine.moog_osc_mix(params:get("moog_osc1"), params:get("moog_osc2"), params:get("moog_osc3")) end)
   params:add_control("moog_osc2", "osc 2 (pulse)", controlspec.new(0, 1, 'lin', 0.01, 0.5))
   params:set_action("moog_osc2", function() engine.moog_osc_mix(params:get("moog_osc1"), params:get("moog_osc2"), params:get("moog_osc3")) end)
   params:add_control("moog_osc3", "osc 3 (sub)", controlspec.new(0, 1, 'lin', 0.01, 0.3))
   params:set_action("moog_osc3", function() engine.moog_osc_mix(params:get("moog_osc1"), params:get("moog_osc2"), params:get("moog_osc3")) end)
+  params:add_control("moog_level", "level", controlspec.new(0, 1, 'lin', 0.01, 0.6))
+  params:set_action("moog_level", function(v) engine.moog_level(v) end)
 
+  -- SEQUENCER
   params:add_group("seq_grp", "SEQUENCER (1601)", 6)
   params:add_number("seq_length", "length", 1, SEQ_MAX, 16)
   params:add_option("seq_division", "division", DIV_NAMES, 5)
@@ -503,6 +548,7 @@ local function setup_params()
   params:set_action("seq_scale", function() scale_generate() end)
   params:add_number("seq_swing", "swing", 50, 80, 50)
 
+  -- REVERB
   params:add_group("fx_grp", "REVERB", 3)
   params:add_control("verb_mix", "mix", controlspec.new(0, 1, 'lin', 0.01, 0.3))
   params:set_action("verb_mix", function(v) engine.verb_mix(v) end)
@@ -511,17 +557,36 @@ local function setup_params()
   params:add_control("verb_damp", "damp", controlspec.new(0, 1, 'lin', 0.01, 0.5))
   params:set_action("verb_damp", function(v) engine.verb_damp(v) end)
 
-  params:add_group("midi_grp", "MIDI", 2)
-  params:add_number("midi_out_ch", "midi out ch", 1, 16, 1)
-  params:add_number("midi_in_ch", "midi in ch", 1, 16, 1)
-
-  params:add_group("lfo_grp", "LFO", 6)
+  -- LFO
+  params:add_group("lfo_grp", "LFO (Modulation)", 6)
   for i = 1, 3 do
     params:add_control("lfo_rate_"..i, "lfo "..i.." rate", controlspec.new(0.01, 20, 'exp', 0.01, lfo.rate[i], "hz"))
     params:set_action("lfo_rate_"..i, function(v) lfo.rate[i] = v end)
     params:add_option("lfo_shape_"..i, "lfo "..i.." shape", SHAPE_NAMES, lfo.shape[i])
     params:set_action("lfo_shape_"..i, function(v) lfo.shape[i] = v end)
   end
+
+  -- ROBOT
+  params:add_group("robot_grp", "ROBOT", 3)
+  params:add_option("robot_active", "robot", {"off", "on"}, 2) -- ON by default
+  params:set_action("robot_active", function(v)
+    if v == 2 then
+      robot.active = true; bandmate:start(); explorer.active = true
+      explorer:enter_phase(1, bandmate:get_pace())
+      bandmate:save_home({spirit = macro.spirit, filter = macro.filter})
+    else
+      robot.active = false; bandmate:stop(); explorer.active = false
+    end
+  end)
+  params:add_option("robot_mindset", "mindset", Bandmate.MINDSET_NAMES, 5)
+  params:set_action("robot_mindset", function(v) bandmate:set_mindset(v) end)
+  params:add_option("robot_personality", "personality", robot_profile.PERSONALITIES, 1)
+  params:set_action("robot_personality", function(v) robot.personality = v end)
+
+  -- MIDI
+  params:add_group("midi_grp", "MIDI", 2)
+  params:add_number("midi_out_ch", "midi out ch", 1, 16, 1)
+  params:add_number("midi_in_ch", "midi in ch", 1, 16, 1)
 end
 
 ----------------------------------------------------------------
@@ -550,7 +615,13 @@ function init()
   my_lattice:start()
 
   apply_all_macros()
-  explorer:enter_phase(1)
+
+  -- robot starts automatically — subtle, natural, always alive
+  robot.active = true
+  bandmate:start()
+  explorer.active = true
+  explorer:enter_phase(1, bandmate:get_pace())
+  bandmate:save_home({spirit = macro.spirit, filter = macro.filter})
 
   local scr = metro.init()
   scr.event = function()
@@ -610,27 +681,22 @@ function enc(n, d)
     end
 
   elseif page == 3 then -- MATRIX
-    -- E2 scrolls source row, shift+E2 scrolls dest col
     if n == 2 then
-      if shift then
-        mat_cursor[2] = util.clamp(mat_cursor[2] + d, 1, 5)
-      else
-        mat_cursor[1] = util.clamp(mat_cursor[1] + d, 1, 4)
-      end
+      sel[3] = util.clamp(sel[3] + d, 1, MAT_ITEM_COUNT)
     elseif n == 3 then
-      if shift then
-        -- shift+E3: tweak LFO rate (or chaos coeff for S&H)
-        if mat_cursor[1] <= 3 then
-          local which = mat_cursor[1]
-          lfo.rate[which] = util.clamp(lfo.rate[which] + d * 0.1, 0.01, 20)
-          params:set("lfo_rate_" .. which, lfo.rate[which])
-        else
-          chaos:drift(d * 0.02)
-        end
+      local idx = sel[3]
+      if idx == 1 then lfo.rate[1] = util.clamp(lfo.rate[1] + d * 0.1, 0.01, 20); params:set("lfo_rate_1", lfo.rate[1])
+      elseif idx == 2 then lfo.shape[1] = util.clamp(lfo.shape[1] + d, 1, 4); params:set("lfo_shape_1", lfo.shape[1])
+      elseif idx == 3 then lfo.rate[2] = util.clamp(lfo.rate[2] + d * 0.1, 0.01, 20); params:set("lfo_rate_2", lfo.rate[2])
+      elseif idx == 4 then lfo.shape[2] = util.clamp(lfo.shape[2] + d, 1, 4); params:set("lfo_shape_2", lfo.shape[2])
+      elseif idx == 5 then lfo.rate[3] = util.clamp(lfo.rate[3] + d * 0.1, 0.01, 20); params:set("lfo_rate_3", lfo.rate[3])
+      elseif idx == 6 then lfo.shape[3] = util.clamp(lfo.shape[3] + d, 1, 4); params:set("lfo_shape_3", lfo.shape[3])
+      elseif idx == 7 then chaos:drift(d * 0.02)
       else
-        -- E3: set routing amount
-        matrix[mat_cursor[1]][mat_cursor[2]] = util.clamp(
-          matrix[mat_cursor[1]][mat_cursor[2]] + d * 0.05, -1, 1)
+        local cell = idx - 7
+        local src = math.ceil(cell / 5)
+        local dst = ((cell - 1) % 5) + 1
+        matrix[src][dst] = util.clamp(matrix[src][dst] + d * 0.05, -1, 1)
       end
     end
 
@@ -704,13 +770,7 @@ function key(n, z)
     else
       k3_held = false; shift = false
       if not k2_held then
-        if page == 3 and mat_cursor[1] <= 3 then
-          -- MATRIX page + LFO row: cycle LFO shape
-          local which = mat_cursor[1]
-          lfo.shape[which] = (lfo.shape[which] % 4) + 1
-          params:set("lfo_shape_" .. which, lfo.shape[which])
-          set_flash("LFO" .. which .. " " .. SHAPE_NAMES[lfo.shape[which]])
-        elseif page == 2 then
+        if page == 2 then
           -- SEQ page: cycle direction
           seq.dir = (seq.dir % 4) + 1
           params:set("seq_direction", seq.dir)
@@ -917,47 +977,74 @@ local function draw_seq()
   end
 end
 
--- PAGE 3: MATRIX — modulation routing
+-- PAGE 3: MATRIX — modulation routing (scrollable list)
 local function draw_matrix()
-  local col_start = 28
-  local col_w = 19
-  for d = 1, 5 do
-    screen.level(d == mat_cursor[2] and 12 or 4)
-    screen.move(col_start + (d - 1) * col_w, 18)
-    screen.text(MOD_DST[d])
-  end
-  for s = 1, 4 do
-    local y = 27 + (s - 1) * 10
-    screen.level(s == mat_cursor[1] and 10 or 3)
-    screen.move(2, y); screen.text(MOD_SRC[s])
-    -- activity dot
-    local act = s <= 3 and math.abs(lfo.val[s]) or math.abs(sh_val)
-    screen.level(math.floor(act * 6) + 1); screen.pixel(24, y - 3); screen.fill()
-    for d = 1, 5 do
-      local v = matrix[s][d]
-      local x = col_start + (d - 1) * col_w + 4
-      local cur = s == mat_cursor[1] and d == mat_cursor[2]
-      screen.level(cur and 15 or (v ~= 0 and math.floor(math.abs(v) * 8) + 3 or 1))
-      if v > 0.01 then screen.rect(x, y - 5, 6, 6); screen.fill()
-      elseif v < -0.01 then screen.rect(x, y - 5, 6, 6); screen.stroke()
-      else screen.pixel(x + 2, y - 2); screen.fill() end
+  local cur = sel[3]
+  -- show 7 visible items centered on selection
+  local visible = 7
+  local start = math.max(1, math.min(cur - 3, MAT_ITEM_COUNT - visible + 1))
+
+  for i = 0, visible - 1 do
+    local idx = start + i
+    if idx > MAT_ITEM_COUNT then break end
+    local item_type, label, value = mat_item_info(idx)
+    local y = 14 + i * 7
+    local is_sel = idx == cur
+
+    -- selection arrow
+    if is_sel then
+      screen.level(15); screen.move(1, y); screen.text(">")
+    end
+
+    -- label
+    screen.level(is_sel and 15 or 5)
+    screen.move(8, y); screen.text(label)
+
+    -- value
+    screen.level(is_sel and 12 or 4)
+
+    if item_type == "route" then
+      -- show small bar for routing amount
+      local cell = idx - 7
+      local src = math.ceil(cell / 5)
+      local dst = ((cell - 1) % 5) + 1
+      local v = matrix[src][dst]
+      local bar_x = 76
+      local bar_w = 30
+      local mid = bar_x + bar_w / 2
+      -- center line
+      screen.level(2); screen.pixel(mid, y - 4); screen.fill()
+      -- fill from center
+      if math.abs(v) > 0.01 then
+        local fill_w = math.floor(math.abs(v) * bar_w / 2)
+        screen.level(is_sel and 12 or 6)
+        if v > 0 then
+          screen.rect(mid, y - 5, fill_w, 4); screen.fill()
+        else
+          screen.rect(mid - fill_w, y - 5, fill_w, 4); screen.fill()
+        end
+      end
+      -- value text
+      screen.level(is_sel and 10 or 3)
+      screen.move(110, y); screen.text(value)
+    else
+      -- text value for LFO/chaos params
+      screen.move(76, y); screen.text(value)
+
+      -- activity indicator for LFO items
+      if item_type == "lfo_rate" or item_type == "lfo_shape" then
+        local which = math.ceil(idx / 2)
+        local act = math.abs(lfo.val[which])
+        screen.level(math.floor(act * 8) + 2)
+        screen.circle(124, y - 2, 2); screen.fill()
+      end
     end
   end
-  -- bottom info: routing value + LFO details
-  screen.level(7); screen.move(2, 58)
-  screen.text(MOD_SRC[mat_cursor[1]] .. ">" .. MOD_DST_FULL[mat_cursor[2]])
-  screen.level(12); screen.move(86, 58)
-  screen.text(string.format("%+.2f", matrix[mat_cursor[1]][mat_cursor[2]]))
 
-  -- show LFO rate/shape for selected source (or chaos coeff for S&H)
-  screen.level(5); screen.move(2, 64)
-  if mat_cursor[1] <= 3 then
-    local i = mat_cursor[1]
-    screen.text(string.format("%s %.2fhz  K3=shape  shf+E3=rate",
-      SHAPE_NAMES[lfo.shape[i]], lfo.rate[i]))
-  else
-    screen.text(string.format("chaos x=%.2f  shf+E3=drift", chaos.coeff_x))
-  end
+  -- scroll indicator
+  screen.level(3)
+  if start > 1 then screen.move(122, 11); screen.text("^") end
+  if start + visible - 1 < MAT_ITEM_COUNT then screen.move(122, 63); screen.text("v") end
 end
 
 -- PAGE 4: ROBOT — full autonomous status
