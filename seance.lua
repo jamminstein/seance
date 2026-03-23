@@ -79,6 +79,12 @@ local anim_frame = 0
 local reel_angle = 0
 local mat_cursor = {1, 1}
 
+-- per-page selected param index (E2 scrolls, E3 adjusts)
+local sel = {1, 1, 1, 1}
+local PLAY_PARAMS = {"SPIRIT", "FILTER", "CHAOS", "VERB ROOM", "PORTAMENTO"}
+local SEQ_PARAMS = {"step pitch", "length", "direction", "division", "root note", "scale"}
+local ROBOT_PARAMS = {"mindset", "personality"}
+
 -- macros (0-1)
 local macro = {spirit = 0.4, filter = 0.3, chaos = 0.2}
 
@@ -569,42 +575,60 @@ function enc(n, d)
     return
   end
 
+  -- E2 = scroll params, E3 = adjust selected param (all pages)
+
   if page == 1 then -- PLAY
-    if shift then
-      if n == 2 then macro.chaos = util.clamp(macro.chaos + d * 0.02, 0, 1); apply_chaos_macro()
-      elseif n == 3 then params:delta("verb_room", d) end
-    else
-      if n == 2 then macro.filter = util.clamp(macro.filter + d * 0.015, 0, 1); apply_filter()
-      elseif n == 3 then macro.spirit = util.clamp(macro.spirit + d * 0.02, 0, 1); apply_spirit() end
+    if n == 2 then
+      sel[1] = util.clamp(sel[1] + d, 1, #PLAY_PARAMS)
+    elseif n == 3 then
+      local s = sel[1]
+      if s == 1 then macro.spirit = util.clamp(macro.spirit + d * 0.02, 0, 1); apply_spirit()
+      elseif s == 2 then macro.filter = util.clamp(macro.filter + d * 0.015, 0, 1); apply_filter()
+      elseif s == 3 then macro.chaos = util.clamp(macro.chaos + d * 0.02, 0, 1); apply_chaos_macro()
+      elseif s == 4 then params:delta("verb_room", d)
+      elseif s == 5 then params:delta("moog_porta", d)
+      end
     end
 
   elseif page == 2 then -- SEQ
-    if shift then
-      if n == 2 then params:delta("seq_scale", d)
-      elseif n == 3 then params:delta("seq_division", d) end
-    else
-      if n == 2 then
+    if n == 2 then
+      sel[2] = util.clamp(sel[2] + d, 1, #SEQ_PARAMS)
+    elseif n == 3 then
+      local s = sel[2]
+      if s == 1 then
         local len = params:get("seq_length")
-        local s = util.clamp(seq.pos == 0 and 1 or seq.pos, 1, len)
-        seq.data[s].degree = util.clamp(seq.data[s].degree + d, 1, #seq.scale_notes)
-      elseif n == 3 then params:delta("seq_length", d) end
+        local pos = util.clamp(seq.pos == 0 and 1 or seq.pos, 1, len)
+        seq.data[pos].degree = util.clamp(seq.data[pos].degree + d, 1, #seq.scale_notes)
+      elseif s == 2 then params:delta("seq_length", d)
+      elseif s == 3 then
+        seq.dir = util.clamp(seq.dir + d, 1, 4)
+        params:set("seq_direction", seq.dir)
+      elseif s == 4 then params:delta("seq_division", d)
+      elseif s == 5 then params:delta("seq_root", d)
+      elseif s == 6 then params:delta("seq_scale", d)
+      end
     end
 
   elseif page == 3 then -- MATRIX
+    -- E2 scrolls source row, shift+E2 scrolls dest col
     if n == 2 then
-      if shift then mat_cursor[1] = util.clamp(mat_cursor[1] + d, 1, 4)
-      else mat_cursor[2] = util.clamp(mat_cursor[2] + d, 1, 5) end
-    elseif n == 3 then
-      if shift and mat_cursor[1] <= 3 then
-        -- shift+E3 on LFO row: tweak that LFO's rate
-        local which = mat_cursor[1]
-        lfo.rate[which] = util.clamp(lfo.rate[which] + d * 0.1, 0.01, 20)
-        params:set("lfo_rate_" .. which, lfo.rate[which])
-      elseif shift and mat_cursor[1] == 4 then
-        -- shift+E3 on S&H row: tweak chaos coefficient
-        chaos:drift(d * 0.02)
+      if shift then
+        mat_cursor[2] = util.clamp(mat_cursor[2] + d, 1, 5)
       else
-        -- normal: set routing amount
+        mat_cursor[1] = util.clamp(mat_cursor[1] + d, 1, 4)
+      end
+    elseif n == 3 then
+      if shift then
+        -- shift+E3: tweak LFO rate (or chaos coeff for S&H)
+        if mat_cursor[1] <= 3 then
+          local which = mat_cursor[1]
+          lfo.rate[which] = util.clamp(lfo.rate[which] + d * 0.1, 0.01, 20)
+          params:set("lfo_rate_" .. which, lfo.rate[which])
+        else
+          chaos:drift(d * 0.02)
+        end
+      else
+        -- E3: set routing amount
         matrix[mat_cursor[1]][mat_cursor[2]] = util.clamp(
           matrix[mat_cursor[1]][mat_cursor[2]] + d * 0.05, -1, 1)
       end
@@ -612,13 +636,17 @@ function enc(n, d)
 
   elseif page == 4 then -- ROBOT
     if n == 2 then
-      local m = bandmate.mindset + d
-      m = util.clamp(m, 1, #Bandmate.MINDSET_NAMES)
-      bandmate:set_mindset(m)
-      set_flash(Bandmate.MINDSET_NAMES[m])
+      sel[4] = util.clamp(sel[4] + d, 1, #ROBOT_PARAMS)
     elseif n == 3 then
-      robot.personality = util.clamp(robot.personality + d, 1, 3)
-      set_flash(robot_profile.PERSONALITIES[robot.personality])
+      local s = sel[4]
+      if s == 1 then
+        local m = util.clamp(bandmate.mindset + d, 1, #Bandmate.MINDSET_NAMES)
+        bandmate:set_mindset(m)
+        set_flash(Bandmate.MINDSET_NAMES[m])
+      elseif s == 2 then
+        robot.personality = util.clamp(robot.personality + d, 1, 3)
+        set_flash(robot_profile.PERSONALITIES[robot.personality])
+      end
     end
   end
 end
@@ -771,31 +799,37 @@ end
 
 -- PAGE 1: PLAY — macro bars + mini seq
 local function draw_play()
-  -- spirit bar
-  local sp = macro.spirit
-  screen.level(10); screen.move(2, 19); screen.text("SPIRIT")
-  screen.level(2); screen.rect(36, 13, 62, 6); screen.fill()
-  screen.level(sp < 0.35 and 12 or (sp > 0.65 and 6 or 9))
-  screen.rect(36, 13, math.floor(sp * 62), 6); screen.fill()
-  screen.level(5); screen.move(102, 19)
-  screen.text(sp < 0.35 and "TAPE" or (sp > 0.65 and "MOOG" or "blend"))
+  local s = sel[1]
+  local vals = {macro.spirit, macro.filter, macro.chaos, params:get("verb_room"), params:get("moog_porta")}
+  local labels = {"SPIRIT", "FILTER", "CHAOS", "VERB RM", "PORTA"}
+  local right_labels = {
+    macro.spirit < 0.35 and "TAPE" or (macro.spirit > 0.65 and "MOOG" or "blend"),
+    (function() local cv = 20 * math.pow(18000/20, macro.filter); return cv >= 1000 and string.format("%.1fk", cv/1000) or string.format("%d", math.floor(cv)) end)(),
+    string.format("%.0f%%", macro.chaos * 100),
+    string.format("%.2f", params:get("verb_room")),
+    string.format("%.3f", params:get("moog_porta")),
+  }
 
-  -- filter bar
-  local fi = macro.filter
-  screen.level(10); screen.move(2, 28); screen.text("FILTER")
-  screen.level(2); screen.rect(36, 22, 62, 6); screen.fill()
-  screen.level(10); screen.rect(36, 22, math.floor(fi * 62), 6); screen.fill()
-  local cv = 20 * math.pow(18000 / 20, fi)
-  screen.level(5); screen.move(102, 28)
-  screen.text(cv >= 1000 and string.format("%.1fk", cv / 1000) or string.format("%d", math.floor(cv)))
-
-  -- chaos bar
-  local ch = macro.chaos
-  screen.level(10); screen.move(2, 37); screen.text("CHAOS")
-  screen.level(2); screen.rect(36, 31, 62, 6); screen.fill()
-  screen.level(7); screen.rect(36, 31, math.floor(ch * 62), 6); screen.fill()
-  screen.level(5); screen.move(102, 37)
-  screen.text(string.format("%.0f%%", ch * 100))
+  for i = 1, #PLAY_PARAMS do
+    local y = 11 + (i - 1) * 8
+    local is_sel = i == s
+    -- selection arrow
+    if is_sel then
+      screen.level(15); screen.move(1, y + 5); screen.text(">")
+    end
+    -- label
+    screen.level(is_sel and 15 or 5)
+    screen.move(8, y + 5); screen.text(labels[i])
+    -- bar
+    local bx, bw, bh = 42, 54, 5
+    screen.level(2); screen.rect(bx, y, bw, bh); screen.fill()
+    screen.level(is_sel and 12 or 6)
+    screen.rect(bx, y, math.floor((vals[i] or 0) * bw), bh); screen.fill()
+    screen.level(is_sel and 10 or 3); screen.rect(bx, y, bw, bh); screen.stroke()
+    -- value
+    screen.level(is_sel and 12 or 4)
+    screen.move(100, y + 5); screen.text(right_labels[i] or "")
+  end
 
   screen.level(1); screen.move(0, 40); screen.line(128, 40); screen.stroke()
 
@@ -855,23 +889,32 @@ local function draw_seq()
     end
   end
 
-  -- info line 1: direction, length, division
-  screen.level(8); screen.move(2, 56); screen.text(DIR_NAMES[seq.dir])
-  screen.level(6); screen.move(18, 56); screen.text("len " .. len)
-  screen.move(48, 56); screen.text(DIV_NAMES[params:get("seq_division")])
-  -- active step count
-  local active_count = 0
-  for i = 1, len do if seq.data[i].active then active_count = active_count + 1 end end
-  screen.move(80, 56); screen.text(active_count .. "/" .. len .. " on")
-
-  -- info line 2: root, scale
-  screen.level(5); screen.move(2, 64)
-  screen.text(musicutil.note_num_to_name(params:get("seq_root"), true))
-  screen.move(22, 64)
+  -- param list with selection indicator
+  local s = sel[2]
   local sn = musicutil.SCALES[params:get("seq_scale")].name
-  screen.text(#sn > 14 and string.sub(sn, 1, 13) .. "." or sn)
-  -- hint
-  screen.level(3); screen.move(88, 64); screen.text("K3=dir")
+  if #sn > 10 then sn = string.sub(sn, 1, 9) .. "." end
+  local root_name = musicutil.note_num_to_name(params:get("seq_root"), true)
+  local seq_vals = {
+    "pitch",
+    "len " .. len,
+    "dir " .. DIR_NAMES[seq.dir],
+    DIV_NAMES[params:get("seq_division")],
+    root_name,
+    sn,
+  }
+  -- draw as 2 rows of 3
+  for i = 1, #SEQ_PARAMS do
+    local col = ((i - 1) % 3)
+    local row = math.floor((i - 1) / 3)
+    local x = 2 + col * 43
+    local y = 54 + row * 8
+    local is_sel = i == s
+    if is_sel then
+      screen.level(15); screen.move(x, y); screen.text(">")
+    end
+    screen.level(is_sel and 15 or 5)
+    screen.move(x + 6, y); screen.text(seq_vals[i])
+  end
 end
 
 -- PAGE 3: MATRIX — modulation routing
@@ -925,12 +968,17 @@ local function draw_robot()
     return
   end
 
+  local s = sel[4]
   -- mindset
-  screen.level(12); screen.move(2, 18)
+  local ms = s == 1
+  if ms then screen.level(15); screen.move(1, 18); screen.text(">") end
+  screen.level(ms and 15 or 8); screen.move(8, 18)
   screen.text("mindset: " .. Bandmate.MINDSET_NAMES[bandmate.mindset])
 
   -- personality
-  screen.level(8); screen.move(2, 27)
+  local ps = s == 2
+  if ps then screen.level(15); screen.move(1, 27); screen.text(">") end
+  screen.level(ps and 15 or 6); screen.move(8, 27)
   screen.text("personality: " .. robot_profile.PERSONALITIES[robot.personality])
 
   -- explorer phase + intensity bar
