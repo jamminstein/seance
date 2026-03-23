@@ -169,10 +169,10 @@ end
 
 local function apply_spirit()
   local s = macro.spirit
-  engine.tape_level(lerp(0.7, 0.12, s))
-  engine.moog_level(lerp(0.12, 0.7, s))
+  engine.tape_level(lerp(1.0, 0.3, s))
+  engine.moog_level(lerp(0.3, 1.0, s))
   engine.tape_voice_type(s * 2)
-  engine.verb_mix(util.clamp(lerp(0.45, 0.12, s) + chaos:get_routed("verb_mix"), 0, 1))
+  engine.verb_mix(util.clamp(lerp(0.45, 0.15, s) + chaos:get_routed("verb_mix"), 0, 1))
 end
 
 local function apply_filter()

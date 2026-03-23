@@ -95,13 +95,13 @@ Engine_Seance : CroneEngine {
                 doneAction: Done.freeSelf
             );
 
-            sig = sig * env * amp * level;
+            sig = sig * env * amp * level * 2;
             sig = Splay.ar(
                 [sig, DelayL.ar(sig, 0.02, 0.004)],
                 0.6
             );
             Out.ar(out, sig);
-            Out.ar(verb_out, sig * 0.3);
+            Out.ar(verb_out, sig * 0.35);
         }).add;
 
         // ── MOOG (MiniMoog) ──────────────────────────────────
@@ -151,9 +151,9 @@ Engine_Seance : CroneEngine {
                 gate
             );
 
-            sig = sig * ampEnv * amp * level;
+            sig = sig * ampEnv * amp * level * 2;
             Out.ar(out, sig ! 2);
-            Out.ar(verb_out, sig ! 2 * 0.15);
+            Out.ar(verb_out, sig ! 2 * 0.2);
         }).add;
 
         // ── REVERB ───────────────────────────────────────────
