@@ -171,52 +171,110 @@ profile.params = {
 
   -- === LFOs ===
   lfo_rate_1 = {
-    group = "structural",
-    weight = 0.25,
-    sensitivity = 0.3,
+    group = "modulation",
+    weight = 0.55,
+    sensitivity = 0.5,
     direction = "both",
-    description = "LFO 1 rate",
+    description = "LFO 1 rate — ride this",
   },
   lfo_rate_2 = {
-    group = "structural",
-    weight = 0.25,
-    sensitivity = 0.3,
+    group = "modulation",
+    weight = 0.55,
+    sensitivity = 0.5,
     direction = "both",
-    description = "LFO 2 rate",
+    description = "LFO 2 rate — ride this",
   },
   lfo_rate_3 = {
-    group = "structural",
-    weight = 0.25,
+    group = "modulation",
+    weight = 0.55,
+    sensitivity = 0.5,
+    direction = "both",
+    description = "LFO 3 rate — ride this",
+  },
+  lfo_shape_1 = {
+    group = "modulation",
+    weight = 0.20,
+    sensitivity = 1.0,
+    direction = "both",
+    description = "LFO 1 waveform",
+  },
+  lfo_shape_2 = {
+    group = "modulation",
+    weight = 0.20,
+    sensitivity = 1.0,
+    direction = "both",
+    description = "LFO 2 waveform",
+  },
+  lfo_shape_3 = {
+    group = "modulation",
+    weight = 0.20,
+    sensitivity = 1.0,
+    direction = "both",
+    description = "LFO 3 waveform",
+  },
+
+  -- === MATRIX ROUTING (the ARP 2500 heart) ===
+  -- these are the patch cables — the conductor rewires constantly
+  matrix_1_1 = { group = "matrix", weight = 0.60, sensitivity = 0.5, direction = "both", description = "LFO1>warble" },
+  matrix_1_2 = { group = "matrix", weight = 0.70, sensitivity = 0.6, direction = "both", description = "LFO1>cutoff" },
+  matrix_1_3 = { group = "matrix", weight = 0.45, sensitivity = 0.4, direction = "both", description = "LFO1>res" },
+  matrix_1_4 = { group = "matrix", weight = 0.50, sensitivity = 0.5, direction = "both", description = "LFO1>pw" },
+  matrix_1_5 = { group = "matrix", weight = 0.35, sensitivity = 0.4, direction = "both", description = "LFO1>transpose" },
+  matrix_2_1 = { group = "matrix", weight = 0.55, sensitivity = 0.5, direction = "both", description = "LFO2>warble" },
+  matrix_2_2 = { group = "matrix", weight = 0.65, sensitivity = 0.6, direction = "both", description = "LFO2>cutoff" },
+  matrix_2_3 = { group = "matrix", weight = 0.50, sensitivity = 0.5, direction = "both", description = "LFO2>res" },
+  matrix_2_4 = { group = "matrix", weight = 0.55, sensitivity = 0.5, direction = "both", description = "LFO2>pw" },
+  matrix_2_5 = { group = "matrix", weight = 0.30, sensitivity = 0.3, direction = "both", description = "LFO2>transpose" },
+  matrix_3_1 = { group = "matrix", weight = 0.50, sensitivity = 0.5, direction = "both", description = "LFO3>warble" },
+  matrix_3_2 = { group = "matrix", weight = 0.60, sensitivity = 0.5, direction = "both", description = "LFO3>cutoff" },
+  matrix_3_3 = { group = "matrix", weight = 0.45, sensitivity = 0.4, direction = "both", description = "LFO3>res" },
+  matrix_3_4 = { group = "matrix", weight = 0.50, sensitivity = 0.5, direction = "both", description = "LFO3>pw" },
+  matrix_3_5 = { group = "matrix", weight = 0.25, sensitivity = 0.3, direction = "both", description = "LFO3>transpose" },
+  matrix_4_1 = { group = "matrix", weight = 0.40, sensitivity = 0.4, direction = "both", description = "S&H>warble" },
+  matrix_4_2 = { group = "matrix", weight = 0.55, sensitivity = 0.5, direction = "both", description = "S&H>cutoff" },
+  matrix_4_3 = { group = "matrix", weight = 0.35, sensitivity = 0.3, direction = "both", description = "S&H>res" },
+  matrix_4_4 = { group = "matrix", weight = 0.40, sensitivity = 0.4, direction = "both", description = "S&H>pw" },
+  matrix_4_5 = { group = "matrix", weight = 0.30, sensitivity = 0.4, direction = "both", description = "S&H>transpose" },
+
+  -- === CHAOS POLYNOMIAL ===
+  chaos_coeff = {
+    group = "modulation",
+    weight = 0.30,
     sensitivity = 0.3,
     direction = "both",
-    description = "LFO 3 rate",
+    description = "chaos polynomial coefficient drift",
   },
 }
 
 -- phase-specific behavior hints for the conductor
 profile.phase_hints = {
   SUMMON = {
-    -- quiet, expectant
-    prefer_low = {"macro_chaos", "verb_mix"},
-    prefer_high = {},
-    suppress = {"seq_direction"},
+    -- quiet, expectant — sparse routing, slow LFOs
+    prefer_low = {"macro_chaos", "verb_mix", "lfo_rate_1", "lfo_rate_2", "lfo_rate_3"},
+    prefer_high = {"matrix_1_1"}, -- subtle warble modulation only
+    suppress = {"seq_direction", "matrix_1_5", "matrix_2_5", "matrix_3_5", "matrix_4_5"},
   },
   HAUNT = {
-    -- ghostly, tape-heavy
+    -- ghostly — deep modulation, warble and filter routing active
     prefer_low = {"macro_chaos"},
-    prefer_high = {"tape_warble", "verb_room", "tape_release"},
+    prefer_high = {"tape_warble", "verb_room", "tape_release",
+      "matrix_1_1", "matrix_2_2", "matrix_3_1", "lfo_rate_1"},
     suppress = {},
   },
   POSSESS = {
-    -- full intensity
+    -- full intensity — everything routed, fast LFOs, chaos high
     prefer_low = {},
-    prefer_high = {"macro_filter", "macro_chaos", "moog_pw"},
+    prefer_high = {"macro_filter", "macro_chaos", "moog_pw",
+      "matrix_1_2", "matrix_2_2", "matrix_3_3", "matrix_4_2",
+      "lfo_rate_1", "lfo_rate_2", "lfo_rate_3", "chaos_coeff"},
     suppress = {},
   },
   RELEASE = {
-    -- decaying, thinning
-    prefer_low = {"macro_chaos", "macro_filter"},
-    prefer_high = {"verb_room", "verb_mix", "tape_release"},
+    -- decaying — clear matrix routes, slow down, reverb up
+    prefer_low = {"macro_chaos", "macro_filter",
+      "matrix_1_2", "matrix_2_2", "matrix_3_3", "matrix_4_2",
+      "lfo_rate_1", "lfo_rate_2", "lfo_rate_3"},
+    prefer_high = {"verb_room", "verb_mix", "tape_release", "matrix_1_1"},
     suppress = {"seq_direction", "seq_length"},
   },
 }

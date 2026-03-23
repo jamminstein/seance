@@ -298,7 +298,22 @@ local function conductor_tick()
         elseif pdef.direction == "down" then delta = -math.abs(delta) end
         delta = delta * ({0.4, 1.0, 1.8})[robot.personality]
 
-        if pname == "macro_spirit" then macro.spirit = util.clamp(macro.spirit + delta, pdef.range_lo or 0, pdef.range_hi or 1); apply_spirit()
+        -- route to the right target
+        local mat_src, mat_dst = pname:match("^matrix_(%d)_(%d)$")
+        if mat_src then
+          -- matrix routing cell
+          local s, d = tonumber(mat_src), tonumber(mat_dst)
+          matrix[s][d] = util.clamp(matrix[s][d] + delta * 0.5, -1, 1)
+        elseif pname == "chaos_coeff" then
+          chaos:drift(delta * 0.3)
+        elseif pname:match("^lfo_shape") then
+          -- shape: random switch (delta doesn't make sense for discrete)
+          local which = tonumber(pname:match("lfo_shape_(%d)"))
+          if which and math.random() < 0.15 then
+            lfo.shape[which] = math.random(1, 4)
+            params:set("lfo_shape_" .. which, lfo.shape[which])
+          end
+        elseif pname == "macro_spirit" then macro.spirit = util.clamp(macro.spirit + delta, pdef.range_lo or 0, pdef.range_hi or 1); apply_spirit()
         elseif pname == "macro_filter" then macro.filter = util.clamp(macro.filter + delta, pdef.range_lo or 0, pdef.range_hi or 1); apply_filter()
         elseif pname == "macro_chaos" then macro.chaos = util.clamp(macro.chaos + delta, pdef.range_lo or 0, pdef.range_hi or 1); apply_chaos_macro()
         elseif pname == "seq_direction" then if math.random() < 0.15 then seq.dir = math.random(1, 4); params:set("seq_direction", seq.dir) end
