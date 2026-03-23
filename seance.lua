@@ -2,28 +2,31 @@
 -- summoning analog ghosts
 --
 -- four spirits haunting this rack:
---   TAPE  — mellotron tape deck ensemble
---   MOOG  — minimoog 3-osc mono beast
---   SEQ   — doepfer/arp 1601 sequencer
+--   TAPE   — mellotron tape deck ensemble
+--   MOOG   — minimoog 3-osc mono beast
+--   SEQ    — doepfer/arp 1601 sequencer
 --   MATRIX — arp 2500 modulation routing
 --
+-- three autonomous layers:
+--   EXPLORER  — phase cycle (SUMMON/HAUNT/POSSESS/RELEASE)
+--   BANDMATE  — style personality + breathing + song form
+--   CHAOS     — polynomial modulation source (logistic map)
+--
 -- PERFORMANCE MACROS:
---   ENC1: SPIRIT — tape/moog blend + character
---   ENC2: FILTER — cutoff sweep + resonance
---   ENC3: CHAOS  — mutation density + seq wildness
---   (hold K3 for shift: E1=verb E2=porta E3=length)
+--   E1: SPIRIT — tape/moog blend + character
+--   E2: FILTER — cutoff sweep + resonance
+--   E3: CHAOS  — mutation density + seq wildness
+--   (hold K3: E1=verb E2=porta E3=length)
 --
 -- KEYS:
---   K2: play/stop sequencer
+--   K2 tap: play/stop
+--   K2 long: cycle mindset
 --   K3 tap: regenerate sequence
---   K2+K3: toggle explorer
---   K2 long press: cycle mindset
+--   K3 hold: shift
+--   K2+K3: toggle bandmate on/off
 --
--- EXPLORER MINDSETS:
+-- MINDSETS:
 --   MELLOTRON / MINIMOOG / SEQUENCER / MODULAR / FULL SEANCE
---
--- EXPLORER PHASES:
---   SUMMON → HAUNT → POSSESS → RELEASE
 --
 -- MIDI in: plays tape (mellotron) voices
 -- MIDI out: sequencer note output
@@ -33,6 +36,9 @@ engine.name = "Seance"
 
 local musicutil = require "musicutil"
 local lattice_lib = require "lattice"
+local Explorer = include "lib/explorer"
+local Bandmate = include "lib/bandmate"
+local Chaos = include "lib/chaos"
 
 ----------------------------------------------------------------
 -- CONSTANTS
@@ -42,45 +48,22 @@ local SEQ_MAX = 16
 local DIVISIONS = {1, 1/2, 1/4, 1/8, 1/16, 1/32}
 local DIV_NAMES = {"1", "1/2", "1/4", "1/8", "1/16", "1/32"}
 local DIR_NAMES = {">>", "<<", "<>", "??"}
-local VOICE_NAMES = {"strings", "flutes", "choir"}
 local SHAPE_NAMES = {"sin", "tri", "sqr", "ramp"}
-
--- explorer
-local PHASE_NAMES = {"SUMMON", "HAUNT", "POSSESS", "RELEASE"}
-local MINDSET_NAMES = {"MELLOTRON", "MINIMOOG", "SEQUENCER", "MODULAR", "FULL SEANCE"}
-
--- phase configs: {duration_min, duration_max, intensity_start, intensity_end}
-local PHASE_CONFIG = {
-  {16, 32, 0.15, 0.45},  -- SUMMON: building
-  {24, 48, 0.40, 0.70},  -- HAUNT: ghostly
-  {16, 32, 0.70, 1.00},  -- POSSESS: full intensity
-  {24, 40, 0.60, 0.15},  -- RELEASE: decaying
-}
-
--- mindset mutation weights: {tape, moog, seq, matrix, fx}
-local MINDSET_WEIGHTS = {
-  {0.80, 0.10, 0.10, 0.30, 0.50},  -- MELLOTRON
-  {0.20, 0.80, 0.20, 0.30, 0.40},  -- MINIMOOG
-  {0.10, 0.20, 0.90, 0.20, 0.20},  -- SEQUENCER
-  {0.30, 0.30, 0.20, 0.90, 0.40},  -- MODULAR
-  {0.60, 0.60, 0.60, 0.60, 0.60},  -- FULL SEANCE
-}
-
--- mindset mutation intervals (steps between mutations)
-local MINDSET_INTERVALS = {12, 8, 4, 6, 6}
-
--- mindset phase duration multipliers
-local MINDSET_PACE = {1.5, 0.8, 0.7, 1.0, 1.0}
 
 ----------------------------------------------------------------
 -- STATE
 ----------------------------------------------------------------
 
+-- autonomous layers
+local explorer = Explorer.new()
+local bandmate = Bandmate.new()
+local chaos = Chaos.new()
+
 -- macro positions (0-1)
 local macro = {
-  spirit = 0.4,   -- E1: tape(0) ↔ moog(1)
-  filter = 0.3,   -- E2: filter sweep
-  chaos = 0.2,    -- E3: chaos level
+  spirit = 0.4,
+  filter = 0.3,
+  chaos = 0.2,
 }
 
 local shift = false
@@ -88,11 +71,11 @@ local k2_held = false
 local k3_held = false
 local k2_time = 0
 
--- tape (mellotron) voice tracking
+-- tape (mellotron)
 local tape_voices = {}
 local tape_next_id = 1
 
--- moog mono state
+-- moog
 local moog_note_on = false
 
 -- sequencer
@@ -118,24 +101,11 @@ local lfo = {
 }
 local sh_val = 0
 
--- explorer
-local explorer = {
-  active = false,
-  mindset = 5,           -- start on FULL SEANCE
-  phase = 1,             -- SUMMON
-  phase_beat = 0,        -- beats into current phase
-  phase_length = 96,     -- beats for this phase (will be set on phase enter)
-  intensity = 0.3,
-  intensity_start = 0.15,
-  intensity_end = 0.45,
-  mutation_clock = 0,
-  flash = nil,           -- flash indicator: {name, timer}
-  last_mutation = "",     -- what just changed
-}
-
 -- display
 local anim_frame = 0
 local reel_angle = 0
+local flash_text = nil
+local flash_timer = 0
 
 -- hardware
 local g = grid.connect()
@@ -144,7 +114,7 @@ local midi_in_device
 local my_lattice
 local seq_sprocket
 local mod_sprocket
-local explorer_sprocket
+local beat_sprocket
 
 ----------------------------------------------------------------
 -- HELPERS
@@ -159,8 +129,7 @@ end
 
 local function note_in_scale(degree)
   if #seq.scale_notes == 0 then return 60 end
-  local idx = util.clamp(degree, 1, #seq.scale_notes)
-  return seq.scale_notes[idx]
+  return seq.scale_notes[util.clamp(degree, 1, #seq.scale_notes)]
 end
 
 local function lfo_compute(shape, ph)
@@ -177,15 +146,16 @@ local function mod_sum(dst_idx)
     local val = s <= 3 and lfo.val[s] or sh_val
     total = total + (matrix[s][dst_idx] * val)
   end
+  -- add chaos modulation
+  total = total + chaos:get_bipolar(math.min(dst_idx, 4)) * 0.15
   return total
 end
 
-local function lerp(a, b, t)
-  return a + (b - a) * t
-end
+local function lerp(a, b, t) return a + (b - a) * t end
 
-local function rand_delta(range)
-  return (math.random() * 2 - 1) * range
+local function set_flash(text)
+  flash_text = text
+  flash_timer = 12
 end
 
 local function seq_regenerate()
@@ -197,76 +167,137 @@ local function seq_regenerate()
       active = math.random() > 0.25,
     }
   end
-  explorer.flash = {"REGEN", 8}
-end
-
-local function explorer_flash(name)
-  explorer.flash = {name, 6}
+  set_flash("REGEN")
 end
 
 ----------------------------------------------------------------
 -- MACRO APPLICATION
--- maps macro knob positions → engine params
 ----------------------------------------------------------------
 
 local function apply_spirit()
   local s = macro.spirit
-  -- crossfade tape ↔ moog
-  local tape_lvl = lerp(0.7, 0.15, s)
-  local moog_lvl = lerp(0.15, 0.7, s)
-  engine.tape_level(tape_lvl)
-  engine.moog_level(moog_lvl)
-  -- tape voice morphs with spirit
-  engine.tape_voice_type(s * 2) -- 0=strings → 2=choir
-  -- more tape = more reverb
-  local verb = lerp(0.45, 0.15, s)
-  engine.verb_mix(verb)
+  engine.tape_level(lerp(0.7, 0.12, s))
+  engine.moog_level(lerp(0.12, 0.7, s))
+  engine.tape_voice_type(s * 2)
+  engine.verb_mix(lerp(0.45, 0.12, s))
 end
 
 local function apply_filter()
   local f = macro.filter
-  -- exponential mapping for cutoff (20-18000)
-  local cutoff = 20 * math.pow(18000/20, f)
-  -- resonance rises with cutoff, tastefully
-  local res = lerp(0.1, 2.5, f * f)
-  -- tape tone follows
+  local cutoff = 20 * math.pow(18000 / 20, f) + mod_sum(2) * 3000
+  local res = lerp(0.1, 2.5, f * f) + mod_sum(3) * 0.8
   local tape_tone = lerp(400, 10000, f)
-  engine.moog_cutoff(cutoff + mod_sum(2) * 4000)
-  engine.moog_res(util.clamp(res + mod_sum(3) * 1.0, 0, 3.5))
+  engine.moog_cutoff(util.clamp(cutoff, 20, 18000))
+  engine.moog_res(util.clamp(res, 0, 3.5))
   engine.tape_tone(util.clamp(tape_tone, 100, 12000))
 end
 
-local function apply_chaos()
-  -- chaos affects explorer mutation rate and seq behavior
-  -- but also immediately affects seq division
+local function apply_chaos_macro()
   local c = macro.chaos
   local div_idx = math.floor(lerp(2, 6, c) + 0.5)
   if seq_sprocket then
     seq_sprocket:set_division(DIVISIONS[util.clamp(div_idx, 1, 6)])
   end
+  -- chaos smoothing: low chaos = smooth, high chaos = stepped
+  chaos:set_smooth(lerp(0.8, 0.05, c))
 end
 
 local function apply_all_macros()
   apply_spirit()
   apply_filter()
-  apply_chaos()
+  apply_chaos_macro()
 end
 
 ----------------------------------------------------------------
--- MODULATION (runs at high rate)
+-- CHANGE APPLICATION
+-- both explorer and bandmate return pending changes
+-- this function applies them uniformly
 ----------------------------------------------------------------
 
-local function update_modulation()
-  -- tape warble from params + modulation
-  local w = params:get("tape_warble") + mod_sum(1) * 0.5
-  engine.tape_warble(util.clamp(w, 0, 1))
+local function apply_changes(changes)
+  if not changes then return end
+  for _, ch in ipairs(changes) do
+    if ch.type == "delta" then
+      -- param delta
+      if ch.param == "macro_spirit" then
+        macro.spirit = util.clamp(macro.spirit + ch.delta, 0, 1)
+        apply_spirit()
+      elseif ch.param == "macro_filter" then
+        macro.filter = util.clamp(macro.filter + ch.delta, 0.02, 0.98)
+        apply_filter()
+      elseif ch.param == "macro_chaos" then
+        macro.chaos = util.clamp(macro.chaos + ch.delta, 0, 1)
+        apply_chaos_macro()
+      else
+        params:delta(ch.param, ch.delta)
+      end
 
-  -- moog pw from params + modulation
-  local p = params:get("moog_pw") + mod_sum(4) * 0.4
-  engine.moog_pw(util.clamp(p, 0.05, 0.95))
+    elseif ch.type == "seq_toggle" then
+      local len = params:get("seq_length")
+      for _ = 1, (ch.count or 1) do
+        local s = math.random(1, len)
+        seq.data[s].active = not seq.data[s].active
+      end
 
-  -- re-apply filter (modulation sources change)
-  apply_filter()
+    elseif ch.type == "seq_pitch" then
+      local len = params:get("seq_length")
+      for _ = 1, (ch.count or 1) do
+        local s = math.random(1, len)
+        local d = seq.data[s].degree + math.random(-(ch.range or 2), (ch.range or 2))
+        seq.data[s].degree = util.clamp(d, 1, #seq.scale_notes)
+      end
+
+    elseif ch.type == "seq_direction" then
+      seq.dir = math.random(1, 4)
+      params:set("seq_direction", seq.dir)
+
+    elseif ch.type == "seq_length" then
+      local new_len = params:get("seq_length") + (ch.delta or 0)
+      params:set("seq_length", util.clamp(new_len, 4, SEQ_MAX))
+
+    elseif ch.type == "seq_scale" then
+      params:set("seq_scale", math.random(1, #musicutil.SCALES))
+      scale_generate()
+
+    elseif ch.type == "seq_root" then
+      local root = params:get("seq_root") + (ch.delta or 0)
+      params:set("seq_root", util.clamp(root, 24, 72))
+      scale_generate()
+
+    elseif ch.type == "matrix_set" then
+      if ch.src and ch.dst then
+        matrix[ch.src][ch.dst] = ch.val or 0
+      end
+
+    elseif ch.type == "lfo_rate" then
+      if ch.which then
+        lfo.rate[ch.which] = util.clamp(lfo.rate[ch.which] + (ch.delta or 0), 0.01, 15)
+        params:set("lfo_rate_" .. ch.which, lfo.rate[ch.which])
+      end
+
+    elseif ch.type == "lfo_shape" then
+      if ch.which then
+        lfo.shape[ch.which] = ch.val or 1
+        params:set("lfo_shape_" .. ch.which, lfo.shape[ch.which])
+      end
+
+    elseif ch.type == "chaos_drift" then
+      chaos:drift(ch.amount or 0.1)
+
+    elseif ch.type == "home_pull" and bandmate:get_home_state() then
+      -- gently pull macros toward saved home state
+      local home = bandmate:get_home_state()
+      local str = ch.strength or 0.05
+      if home.spirit then
+        macro.spirit = lerp(macro.spirit, home.spirit, str)
+        apply_spirit()
+      end
+      if home.filter then
+        macro.filter = lerp(macro.filter, home.filter, str)
+        apply_filter()
+      end
+    end
+  end
 end
 
 ----------------------------------------------------------------
@@ -317,9 +348,9 @@ end
 local function seq_advance()
   local len = params:get("seq_length")
   local dir = seq.dir
-  -- chaos can override direction
+  -- chaos macro can override direction randomly
   if macro.chaos > 0.7 and math.random() < (macro.chaos - 0.7) * 2 then
-    dir = 4 -- random
+    dir = 4
   end
 
   if dir == 1 then
@@ -344,7 +375,6 @@ end
 local function seq_tick()
   if not seq.playing then return end
 
-  -- stop previous note
   if seq.last_note then
     moog_stop()
     if midi_out_device then
@@ -360,234 +390,60 @@ local function seq_tick()
     local xpose = math.floor(mod_sum(5) * 12 + 0.5)
     local degree = util.clamp(step.degree + xpose, 1, #seq.scale_notes)
     local note = note_in_scale(degree)
-    local vel = step.vel
 
-    moog_play(note, vel)
+    moog_play(note, step.vel)
 
     if midi_out_device then
-      midi_out_device:note_on(note, vel, params:get("midi_out_ch"))
+      midi_out_device:note_on(note, step.vel, params:get("midi_out_ch"))
     end
 
-    -- s&h trigger every 4 steps
     if seq.pos % 4 == 1 then
       sh_val = math.random() * 2 - 1
     end
   end
 
-  -- chaos: random step toggling
-  if macro.chaos > 0.8 and math.random() < (macro.chaos - 0.8) * 3 then
-    local rand_step = math.random(1, params:get("seq_length"))
-    seq.data[rand_step].active = not seq.data[rand_step].active
+  -- chaos step toggle at high chaos
+  if macro.chaos > 0.8 and math.random() < (macro.chaos - 0.8) * 2.5 then
+    local rs = math.random(1, params:get("seq_length"))
+    seq.data[rs].active = not seq.data[rs].active
   end
 
-  -- explorer mutation clock
-  if explorer.active then
-    explorer.mutation_clock = explorer.mutation_clock + 1
-    local interval = MINDSET_INTERVALS[explorer.mindset]
-    if explorer.mutation_clock >= interval then
-      explorer.mutation_clock = 0
-      explorer_mutate()
-    end
-  end
+  -- explorer step mutations
+  local ex_changes = explorer:step(bandmate:get_weights())
+  apply_changes(ex_changes)
+
+  -- chaos polynomial advance
+  chaos:step()
 end
 
+-- LFO/modulation tick (high rate)
 local function mod_tick()
   for i = 1, 3 do
     lfo.phase[i] = lfo.phase[i] + (lfo.rate[i] / 96)
     if lfo.phase[i] > 1000 then lfo.phase[i] = lfo.phase[i] - 1000 end
     lfo.val[i] = lfo_compute(lfo.shape[i], lfo.phase[i])
   end
-  update_modulation()
+  -- modulation affects filter + warble + pw
+  local w = params:get("tape_warble") + mod_sum(1) * 0.5
+  engine.tape_warble(util.clamp(w, 0, 1))
+  local p = params:get("moog_pw") + mod_sum(4) * 0.4
+  engine.moog_pw(util.clamp(p, 0.05, 0.95))
+  apply_filter()
 end
 
-----------------------------------------------------------------
--- EXPLORER SYSTEM
-----------------------------------------------------------------
+-- beat tick: explorer phases + bandmate breathing/form
+local function beat_tick()
+  -- explorer phase progression
+  explorer:beat(bandmate:get_pace())
 
-local function explorer_enter_phase(phase_num)
-  explorer.phase = phase_num
-  explorer.phase_beat = 0
-  local cfg = PHASE_CONFIG[phase_num]
-  local pace = MINDSET_PACE[explorer.mindset]
-  local dur_min = math.floor(cfg[1] * pace)
-  local dur_max = math.floor(cfg[2] * pace)
-  explorer.phase_length = math.random(dur_min, dur_max) * 4 -- convert bars to beats
-  explorer.intensity_start = cfg[3]
-  explorer.intensity_end = cfg[4]
-  explorer.intensity = cfg[3]
-  explorer_flash(PHASE_NAMES[phase_num])
-end
+  -- bandmate beat (breathing + form + style mutations)
+  local bm_changes = bandmate:beat()
+  apply_changes(bm_changes)
 
-local function explorer_next_phase()
-  local next = explorer.phase % 4 + 1
-  explorer_enter_phase(next)
-end
-
--- mutation functions for each domain
-local function mutate_tape(intensity)
-  local roll = math.random()
-  if roll < 0.3 then
-    -- warble drift
-    local w = params:get("tape_warble") + rand_delta(0.15 * intensity)
-    params:set("tape_warble", util.clamp(w, 0.05, 0.9))
-    explorer.last_mutation = "warble"
-  elseif roll < 0.6 then
-    -- voice morph via spirit macro
-    macro.spirit = util.clamp(macro.spirit + rand_delta(0.15 * intensity), 0, 1)
-    apply_spirit()
-    explorer.last_mutation = "spirit"
-  elseif roll < 0.8 then
-    -- attack/release drift
-    local a = params:get("tape_attack") + rand_delta(0.3 * intensity)
-    params:set("tape_attack", util.clamp(a, 0.005, 1.5))
-    explorer.last_mutation = "tape env"
-  else
-    -- release drift
-    local r = params:get("tape_release") + rand_delta(1.0 * intensity)
-    params:set("tape_release", util.clamp(r, 0.1, 6.0))
-    explorer.last_mutation = "tape rel"
-  end
-end
-
-local function mutate_moog(intensity)
-  local roll = math.random()
-  if roll < 0.35 then
-    -- filter sweep via macro
-    macro.filter = util.clamp(macro.filter + rand_delta(0.2 * intensity), 0.05, 0.95)
-    apply_filter()
-    explorer.last_mutation = "filter"
-  elseif roll < 0.55 then
-    -- pulse width drift
-    local pw = params:get("moog_pw") + rand_delta(0.2 * intensity)
-    params:set("moog_pw", util.clamp(pw, 0.1, 0.9))
-    explorer.last_mutation = "pw"
-  elseif roll < 0.75 then
-    -- osc mix shift
-    local which = math.random(1, 3)
-    local names = {"moog_osc1", "moog_osc2", "moog_osc3"}
-    local v = params:get(names[which]) + rand_delta(0.3 * intensity)
-    params:set(names[which], util.clamp(v, 0.0, 1.0))
-    explorer.last_mutation = "osc mix"
-  else
-    -- portamento shift
-    local p = params:get("moog_porta") + rand_delta(0.15 * intensity)
-    params:set("moog_porta", util.clamp(p, 0, 0.8))
-    explorer.last_mutation = "porta"
-  end
-end
-
-local function mutate_seq(intensity)
-  local len = params:get("seq_length")
-  local roll = math.random()
-  if roll < 0.3 then
-    -- toggle 1-3 steps
-    local count = math.ceil(intensity * 3)
-    for _ = 1, count do
-      local s = math.random(1, len)
-      seq.data[s].active = not seq.data[s].active
-    end
-    explorer.last_mutation = "steps"
-  elseif roll < 0.5 then
-    -- shift pitches
-    local count = math.ceil(intensity * 4)
-    for _ = 1, count do
-      local s = math.random(1, len)
-      local d = seq.data[s].degree + math.random(-3, 3)
-      seq.data[s].degree = util.clamp(d, 1, #seq.scale_notes)
-    end
-    explorer.last_mutation = "pitch"
-  elseif roll < 0.65 then
-    -- change direction
-    seq.dir = math.random(1, 4)
-    params:set("seq_direction", seq.dir)
-    explorer.last_mutation = "dir " .. DIR_NAMES[seq.dir]
-  elseif roll < 0.8 then
-    -- change length
-    local new_len = len + math.random(-2, 2)
-    params:set("seq_length", util.clamp(new_len, 4, SEQ_MAX))
-    explorer.last_mutation = "len"
-  else
-    -- change scale (dramatic!)
-    if intensity > 0.6 then
-      local num_scales = #musicutil.SCALES
-      params:set("seq_scale", math.random(1, num_scales))
-      scale_generate()
-      explorer.last_mutation = "scale!"
-    else
-      -- shift root
-      local root = params:get("seq_root") + math.random(-2, 2)
-      params:set("seq_root", util.clamp(root, 24, 72))
-      scale_generate()
-      explorer.last_mutation = "root"
-    end
-  end
-end
-
-local function mutate_matrix(intensity)
-  local roll = math.random()
-  if roll < 0.4 then
-    -- set/clear a random routing
-    local s = math.random(1, 4)
-    local d = math.random(1, 5)
-    if math.random() < 0.6 then
-      matrix[s][d] = rand_delta(0.7 * intensity)
-    else
-      matrix[s][d] = 0
-    end
-    explorer.last_mutation = "route"
-  elseif roll < 0.7 then
-    -- change lfo rate
-    local which = math.random(1, 3)
-    lfo.rate[which] = util.clamp(lfo.rate[which] + rand_delta(1.5 * intensity), 0.01, 15)
-    params:set("lfo_rate_" .. which, lfo.rate[which])
-    explorer.last_mutation = "lfo" .. which
-  else
-    -- change lfo shape
-    local which = math.random(1, 3)
-    lfo.shape[which] = math.random(1, 4)
-    params:set("lfo_shape_" .. which, lfo.shape[which])
-    explorer.last_mutation = "shape"
-  end
-end
-
-local function mutate_fx(intensity)
-  local roll = math.random()
-  if roll < 0.5 then
-    local room = params:get("verb_room") + rand_delta(0.2 * intensity)
-    params:set("verb_room", util.clamp(room, 0.1, 0.95))
-    explorer.last_mutation = "room"
-  else
-    local damp = params:get("verb_damp") + rand_delta(0.2 * intensity)
-    params:set("verb_damp", util.clamp(damp, 0.1, 0.9))
-    explorer.last_mutation = "damp"
-  end
-end
-
-function explorer_mutate()
-  local weights = MINDSET_WEIGHTS[explorer.mindset]
-  local intensity = explorer.intensity
-
-  -- roll for each domain
-  if math.random() < weights[1] * intensity then mutate_tape(intensity) end
-  if math.random() < weights[2] * intensity then mutate_moog(intensity) end
-  if math.random() < weights[3] * intensity then mutate_seq(intensity) end
-  if math.random() < weights[4] * intensity then mutate_matrix(intensity) end
-  if math.random() < weights[5] * intensity then mutate_fx(intensity) end
-end
-
-local function explorer_beat_tick()
-  if not explorer.active then return end
-
-  explorer.phase_beat = explorer.phase_beat + 1
-
-  -- lerp intensity
-  local progress = explorer.phase_beat / math.max(explorer.phase_length, 1)
-  progress = util.clamp(progress, 0, 1)
-  explorer.intensity = lerp(explorer.intensity_start, explorer.intensity_end, progress)
-
-  -- phase transition
-  if explorer.phase_beat >= explorer.phase_length then
-    explorer_next_phase()
+  -- sync explorer flash to display
+  if explorer.flash and explorer.flash[2] > 0 then
+    set_flash(explorer.flash[1])
+    explorer.flash[2] = 0
   end
 end
 
@@ -612,55 +468,40 @@ end
 local function setup_params()
   params:add_separator("SEANCE")
 
-  -- TAPE
   params:add_group("tape_grp", "TAPE (Mellotron)", 5)
-  params:add_control("tape_warble", "warble",
-    controlspec.new(0, 1, 'lin', 0.01, 0.3))
+  params:add_control("tape_warble", "warble", controlspec.new(0, 1, 'lin', 0.01, 0.3))
   params:set_action("tape_warble", function(v) engine.tape_warble(v) end)
-  params:add_control("tape_attack", "attack",
-    controlspec.new(0.005, 2, 'exp', 0, 0.08, "s"))
+  params:add_control("tape_attack", "attack", controlspec.new(0.005, 2, 'exp', 0, 0.08, "s"))
   params:set_action("tape_attack", function(v) engine.tape_attack(v) end)
-  params:add_control("tape_release", "release",
-    controlspec.new(0.05, 8, 'exp', 0, 1.2, "s"))
+  params:add_control("tape_release", "release", controlspec.new(0.05, 8, 'exp', 0, 1.2, "s"))
   params:set_action("tape_release", function(v) engine.tape_release(v) end)
-  params:add_control("tape_level", "level",
-    controlspec.new(0, 1, 'lin', 0.01, 0.6))
+  params:add_control("tape_level", "level", controlspec.new(0, 1, 'lin', 0.01, 0.6))
   params:set_action("tape_level", function(v) engine.tape_level(v) end)
-  params:add_control("tape_tone", "tone",
-    controlspec.new(100, 12000, 'exp', 1, 2000, "hz"))
+  params:add_control("tape_tone", "tone", controlspec.new(100, 12000, 'exp', 1, 2000, "hz"))
   params:set_action("tape_tone", function(v) engine.tape_tone(v) end)
 
-  -- MOOG
   params:add_group("moog_grp", "MOOG (MiniMoog)", 7)
-  params:add_control("moog_cutoff", "cutoff",
-    controlspec.new(20, 18000, 'exp', 1, 1200, "hz"))
+  params:add_control("moog_cutoff", "cutoff", controlspec.new(20, 18000, 'exp', 1, 1200, "hz"))
   params:set_action("moog_cutoff", function(v) engine.moog_cutoff(v) end)
-  params:add_control("moog_res", "resonance",
-    controlspec.new(0, 3.5, 'lin', 0.01, 0.3))
+  params:add_control("moog_res", "resonance", controlspec.new(0, 3.5, 'lin', 0.01, 0.3))
   params:set_action("moog_res", function(v) engine.moog_res(v) end)
-  params:add_control("moog_porta", "portamento",
-    controlspec.new(0, 2, 'lin', 0.001, 0.05, "s"))
+  params:add_control("moog_porta", "portamento", controlspec.new(0, 2, 'lin', 0.001, 0.05, "s"))
   params:set_action("moog_porta", function(v) engine.moog_porta(v) end)
-  params:add_control("moog_pw", "pulse width",
-    controlspec.new(0.05, 0.95, 'lin', 0.01, 0.5))
+  params:add_control("moog_pw", "pulse width", controlspec.new(0.05, 0.95, 'lin', 0.01, 0.5))
   params:set_action("moog_pw", function(v) engine.moog_pw(v) end)
-  params:add_control("moog_osc1", "osc 1 (saw)",
-    controlspec.new(0, 1, 'lin', 0.01, 1.0))
+  params:add_control("moog_osc1", "osc 1 (saw)", controlspec.new(0, 1, 'lin', 0.01, 1.0))
   params:set_action("moog_osc1", function()
     engine.moog_osc_mix(params:get("moog_osc1"), params:get("moog_osc2"), params:get("moog_osc3"))
   end)
-  params:add_control("moog_osc2", "osc 2 (pulse)",
-    controlspec.new(0, 1, 'lin', 0.01, 0.5))
+  params:add_control("moog_osc2", "osc 2 (pulse)", controlspec.new(0, 1, 'lin', 0.01, 0.5))
   params:set_action("moog_osc2", function()
     engine.moog_osc_mix(params:get("moog_osc1"), params:get("moog_osc2"), params:get("moog_osc3"))
   end)
-  params:add_control("moog_osc3", "osc 3 (sub)",
-    controlspec.new(0, 1, 'lin', 0.01, 0.3))
+  params:add_control("moog_osc3", "osc 3 (sub)", controlspec.new(0, 1, 'lin', 0.01, 0.3))
   params:set_action("moog_osc3", function()
     engine.moog_osc_mix(params:get("moog_osc1"), params:get("moog_osc2"), params:get("moog_osc3"))
   end)
 
-  -- SEQUENCER
   params:add_group("seq_grp", "SEQUENCER (1601)", 6)
   params:add_number("seq_length", "length", 1, SEQ_MAX, 16)
   params:add_option("seq_division", "division", DIV_NAMES, 5)
@@ -673,38 +514,31 @@ local function setup_params()
   params:set_action("seq_root", function() scale_generate() end)
   params:add_option("seq_scale", "scale",
     (function()
-      local names = {}
-      for i, s in ipairs(musicutil.SCALES) do names[i] = s.name end
-      return names
+      local n = {}
+      for i, s in ipairs(musicutil.SCALES) do n[i] = s.name end
+      return n
     end)(), 1)
   params:set_action("seq_scale", function() scale_generate() end)
   params:add_number("seq_swing", "swing", 50, 80, 50)
 
-  -- REVERB
   params:add_group("fx_grp", "REVERB", 3)
-  params:add_control("verb_mix", "mix",
-    controlspec.new(0, 1, 'lin', 0.01, 0.3))
+  params:add_control("verb_mix", "mix", controlspec.new(0, 1, 'lin', 0.01, 0.3))
   params:set_action("verb_mix", function(v) engine.verb_mix(v) end)
-  params:add_control("verb_room", "room",
-    controlspec.new(0, 1, 'lin', 0.01, 0.7))
+  params:add_control("verb_room", "room", controlspec.new(0, 1, 'lin', 0.01, 0.7))
   params:set_action("verb_room", function(v) engine.verb_room(v) end)
-  params:add_control("verb_damp", "damp",
-    controlspec.new(0, 1, 'lin', 0.01, 0.5))
+  params:add_control("verb_damp", "damp", controlspec.new(0, 1, 'lin', 0.01, 0.5))
   params:set_action("verb_damp", function(v) engine.verb_damp(v) end)
 
-  -- MIDI
   params:add_group("midi_grp", "MIDI", 2)
   params:add_number("midi_out_ch", "midi out ch", 1, 16, 1)
   params:add_number("midi_in_ch", "midi in ch", 1, 16, 1)
 
-  -- LFOs
   params:add_group("lfo_grp", "LFO (Modulation)", 6)
   for i = 1, 3 do
     params:add_control("lfo_rate_" .. i, "lfo " .. i .. " rate",
       controlspec.new(0.01, 20, 'exp', 0.01, lfo.rate[i], "hz"))
     params:set_action("lfo_rate_" .. i, function(v) lfo.rate[i] = v end)
-    params:add_option("lfo_shape_" .. i, "lfo " .. i .. " shape",
-      SHAPE_NAMES, lfo.shape[i])
+    params:add_option("lfo_shape_" .. i, "lfo " .. i .. " shape", SHAPE_NAMES, lfo.shape[i])
     params:set_action("lfo_shape_" .. i, function(v) lfo.shape[i] = v end)
   end
 end
@@ -722,7 +556,6 @@ function init()
 
   scale_generate()
 
-  -- init sequencer
   for i = 1, SEQ_MAX do
     seq.data[i] = {
       degree = math.random(1, math.min(#seq.scale_notes, 14)),
@@ -731,13 +564,15 @@ function init()
     }
   end
 
-  -- init matrix
   for s = 1, 4 do
     matrix[s] = {}
-    for d = 1, 5 do
-      matrix[s][d] = 0
-    end
+    for d = 1, 5 do matrix[s][d] = 0 end
   end
+
+  -- setup chaos routes
+  chaos:route("tape_warble", 1, 0.1, 0)
+  chaos:route("moog_cutoff", 2, 0.15, 0)
+  chaos:route("moog_pw", 3, 0.1, 0)
 
   -- lattice
   my_lattice = lattice_lib:new()
@@ -754,35 +589,28 @@ function init()
     enabled = true,
   }
 
-  explorer_sprocket = my_lattice:new_sprocket{
-    action = explorer_beat_tick,
+  beat_sprocket = my_lattice:new_sprocket{
+    action = beat_tick,
     division = 1/4,
     enabled = true,
   }
 
   my_lattice:start()
 
-  -- apply initial macros
   apply_all_macros()
-
-  -- init explorer phase
-  explorer_enter_phase(1)
+  explorer:enter_phase(1)
 
   -- screen refresh
-  local screen_metro = metro.init()
-  screen_metro.event = function()
+  local scr = metro.init()
+  scr.event = function()
     anim_frame = anim_frame + 1
     reel_angle = reel_angle + (seq.playing and 0.06 or 0.01)
-    -- decay flash
-    if explorer.flash and explorer.flash[2] > 0 then
-      explorer.flash[2] = explorer.flash[2] - 1
-    end
+    if flash_timer > 0 then flash_timer = flash_timer - 1 end
     redraw()
   end
-  screen_metro.time = 1 / 15
-  screen_metro:start()
+  scr.time = 1 / 15
+  scr:start()
 
-  -- grid
   if g.device then
     g.key = grid_key
     grid_redraw()
@@ -796,32 +624,24 @@ end
 function enc(n, d)
   if n == 1 then
     if shift then
-      -- shift+E1: reverb room
       params:delta("verb_room", d)
     else
-      -- SPIRIT macro
       macro.spirit = util.clamp(macro.spirit + d * 0.02, 0, 1)
       apply_spirit()
     end
-
   elseif n == 2 then
     if shift then
-      -- shift+E2: portamento
       params:delta("moog_porta", d)
     else
-      -- FILTER macro
       macro.filter = util.clamp(macro.filter + d * 0.015, 0, 1)
       apply_filter()
     end
-
   elseif n == 3 then
     if shift then
-      -- shift+E3: seq length
       params:delta("seq_length", d)
     else
-      -- CHAOS macro
       macro.chaos = util.clamp(macro.chaos + d * 0.02, 0, 1)
-      apply_chaos()
+      apply_chaos_macro()
     end
   end
 end
@@ -831,24 +651,32 @@ function key(n, z)
     if z == 1 then
       k2_held = true
       k2_time = util.time()
-      -- check K2+K3 combo
       if k3_held then
-        explorer.active = not explorer.active
-        if explorer.active then
-          explorer_enter_phase(1)
-          explorer_flash("EXPLORE")
+        -- K2+K3: toggle bandmate + explorer
+        local turning_on = not bandmate.active
+        if turning_on then
+          bandmate:start()
+          explorer.active = true
+          explorer:enter_phase(1, bandmate:get_pace())
+          -- save current state as home
+          bandmate:save_home({spirit=macro.spirit, filter=macro.filter})
+          set_flash("BANDMATE ON")
         else
-          explorer_flash("MANUAL")
+          bandmate:stop()
+          explorer.active = false
+          set_flash("MANUAL")
         end
       end
     else
       k2_held = false
-      local held_time = util.time() - k2_time
+      local held = util.time() - k2_time
       if not k3_held then
-        if held_time > 0.5 then
+        if held > 0.5 then
           -- long press: cycle mindset
-          explorer.mindset = explorer.mindset % #MINDSET_NAMES + 1
-          explorer_flash(MINDSET_NAMES[explorer.mindset])
+          local m = bandmate.mindset % #Bandmate.MINDSET_NAMES + 1
+          bandmate:set_mindset(m)
+          explorer.active = bandmate.active -- keep sync
+          set_flash(Bandmate.MINDSET_NAMES[m])
         else
           -- short press: play/stop
           seq.playing = not seq.playing
@@ -868,20 +696,23 @@ function key(n, z)
     if z == 1 then
       k3_held = true
       shift = true
-      -- check K2+K3 combo
       if k2_held then
-        explorer.active = not explorer.active
-        if explorer.active then
-          explorer_enter_phase(1)
-          explorer_flash("EXPLORE")
+        local turning_on = not bandmate.active
+        if turning_on then
+          bandmate:start()
+          explorer.active = true
+          explorer:enter_phase(1, bandmate:get_pace())
+          bandmate:save_home({spirit=macro.spirit, filter=macro.filter})
+          set_flash("BANDMATE ON")
         else
-          explorer_flash("MANUAL")
+          bandmate:stop()
+          explorer.active = false
+          set_flash("MANUAL")
         end
       end
     else
       k3_held = false
       shift = false
-      -- short tap (if K2 wasn't held): regenerate
       if not k2_held then
         seq_regenerate()
       end
@@ -922,11 +753,16 @@ function grid_redraw()
     end
     g:led(x, 1, step.active and 6 or 1)
   end
-  -- explorer intensity on right columns
-  if explorer.active then
-    local bright = math.floor(explorer.intensity * 12) + 2
+  -- explorer intensity column + breathing indicator
+  if bandmate.active then
+    local int = explorer.intensity
     for y = 1, 8 do
-      g:led(16, y, y <= math.floor(explorer.intensity * 8) and bright or 1)
+      g:led(16, y, y <= math.floor(int * 8) and math.floor(int * 10) + 3 or 1)
+    end
+    -- breathing indicator on col 15
+    local br = bandmate.energy
+    for y = 1, 8 do
+      g:led(15, y, y <= math.floor(br * 8) and math.floor(br * 8) + 2 or 0)
     end
   end
   g:refresh()
@@ -936,153 +772,137 @@ end
 -- SCREEN
 ----------------------------------------------------------------
 
-local function draw_macro_bar(y, name, value, label_right)
-  local bar_x = 32
-  local bar_w = 72
-  local bar_h = 6
-  local fill_w = math.floor(value * bar_w)
-
-  -- name
+local function draw_bar(y, name, value, label)
+  local bx, bw, bh = 34, 68, 5
+  local fw = math.floor(value * bw)
   screen.level(10)
-  screen.move(2, y + 5)
+  screen.move(2, y + 4)
   screen.text(name)
-
-  -- bar background
   screen.level(2)
-  screen.rect(bar_x, y, bar_w, bar_h)
+  screen.rect(bx, y, bw, bh)
   screen.fill()
-
-  -- bar fill
   screen.level(8)
-  screen.rect(bar_x, y, fill_w, bar_h)
+  screen.rect(bx, y, fw, bh)
   screen.fill()
-
-  -- bar outline
-  screen.level(4)
-  screen.rect(bar_x, y, bar_w, bar_h)
+  screen.level(3)
+  screen.rect(bx, y, bw, bh)
   screen.stroke()
-
-  -- right label
   screen.level(6)
-  screen.move(108, y + 5)
-  screen.text(label_right)
+  screen.move(106, y + 4)
+  screen.text(label)
 end
 
 function redraw()
   screen.clear()
 
-  -- header
+  -- header line
   screen.level(15)
   screen.move(2, 7)
   screen.text("seance")
 
-  -- phase name (if explorer active)
-  if explorer.active then
-    screen.level(12)
-    local phase_name = PHASE_NAMES[explorer.phase]
-    screen.move(128 - screen.text_extents(phase_name), 7)
-    screen.text(phase_name)
-
-    -- intensity dot
-    local dot_bright = math.floor(explorer.intensity * 12) + 3
-    screen.level(dot_bright)
-    screen.circle(42, 4, 2)
+  if bandmate.active then
+    -- phase name
+    screen.level(11)
+    local pn = Explorer.PHASE_NAMES[explorer.phase]
+    screen.move(128 - screen.text_extents(pn), 7)
+    screen.text(pn)
+    -- breathing state dot
+    local bphase = bandmate.breath_phase
+    local dot_b = bphase == "play" and 12 or (bphase == "silence" and 2 or 7)
+    screen.level(dot_b)
+    screen.circle(44, 4, 2)
     screen.fill()
   else
     screen.level(3)
-    screen.move(108, 7)
+    screen.move(112, 7)
     screen.text(seq.playing and "PLAY" or "stop")
   end
 
-  -- flash indicator
-  if explorer.flash and explorer.flash[2] > 0 then
+  -- flash
+  if flash_timer > 0 and flash_text then
     screen.level(15)
-    screen.move(50, 7)
-    screen.text(explorer.flash[1])
+    local fw = screen.text_extents(flash_text)
+    screen.move(64 - fw / 2, 7)
+    screen.text(flash_text)
   end
 
-  -- separator
-  screen.level(2)
+  screen.level(1)
   screen.move(0, 10)
   screen.line(128, 10)
   screen.stroke()
 
   -- macro bars
-  local spirit_label = macro.spirit < 0.4 and "TAPE" or (macro.spirit > 0.6 and "MOOG" or "blend")
-  draw_macro_bar(13, "SPIRIT", macro.spirit, spirit_label)
+  local sp_label = macro.spirit < 0.35 and "TAPE" or (macro.spirit > 0.65 and "MOOG" or "blend")
+  draw_bar(12, "SPIRIT", macro.spirit, sp_label)
 
-  local cutoff_val = 20 * math.pow(18000/20, macro.filter)
-  local cutoff_str = cutoff_val >= 1000 and string.format("%.1fk", cutoff_val/1000)
-    or string.format("%d", math.floor(cutoff_val))
-  draw_macro_bar(22, "FILTER", macro.filter, cutoff_str)
+  local cv = 20 * math.pow(18000 / 20, macro.filter)
+  draw_bar(20, "FILTER", macro.filter,
+    cv >= 1000 and string.format("%.1fk", cv / 1000) or string.format("%d", math.floor(cv)))
 
-  draw_macro_bar(31, "CHAOS", macro.chaos, string.format("%.0f%%", macro.chaos * 100))
+  draw_bar(28, "CHAOS", macro.chaos, string.format("%.0f%%", macro.chaos * 100))
 
-  -- separator
-  screen.level(2)
-  screen.move(0, 40)
-  screen.line(128, 40)
+  screen.level(1)
+  screen.move(0, 36)
+  screen.line(128, 36)
   screen.stroke()
 
   -- sequencer mini view
   local len = params:get("seq_length")
-  local step_w = math.max(2, math.floor(124 / len))
+  local sw = math.max(2, math.floor(124 / len))
   local max_deg = math.max(#seq.scale_notes, 1)
-
   for i = 1, len do
-    local x = 2 + (i - 1) * step_w
+    local x = 2 + (i - 1) * sw
     local step = seq.data[i]
-
     if step.active then
-      local h = math.floor((step.degree / max_deg) * 14)
-      h = util.clamp(h, 1, 14)
+      local h = util.clamp(math.floor((step.degree / max_deg) * 16), 1, 16)
       screen.level(i == seq.pos and 15 or 4)
-      screen.rect(x, 54 - h, step_w - 1, h)
+      screen.rect(x, 53 - h, sw - 1, h)
       screen.fill()
     else
       screen.level(1)
-      screen.pixel(x, 53)
+      screen.pixel(x, 52)
       screen.fill()
     end
-
     if i == seq.pos and seq.playing then
       screen.level(15)
-      screen.rect(x, 55, step_w - 1, 1)
+      screen.rect(x, 54, sw - 1, 1)
       screen.fill()
     end
   end
 
-  -- bottom status bar
-  screen.level(2)
-  screen.move(0, 58)
-  screen.line(128, 58)
+  screen.level(1)
+  screen.move(0, 57)
+  screen.line(128, 57)
   screen.stroke()
 
-  -- mindset + explorer status
-  screen.level(explorer.active and 10 or 4)
+  -- status bar: mindset + layers
+  screen.level(bandmate.active and 10 or 4)
   screen.move(2, 64)
-  screen.text(MINDSET_NAMES[explorer.mindset])
+  screen.text(Bandmate.MINDSET_NAMES[bandmate.mindset])
 
-  if explorer.active then
-    -- pulsing dot
-    local pulse = math.floor(math.abs(math.sin(anim_frame * 0.15)) * 10) + 5
+  if bandmate.active then
+    -- pulsing explore dot
+    local pulse = math.floor(math.abs(math.sin(anim_frame * 0.12)) * 8) + 5
     screen.level(pulse)
-    screen.circle(72, 62, 2)
+    screen.circle(68, 62, 2)
     screen.fill()
-    screen.level(6)
-    screen.move(77, 64)
-    screen.text("exploring")
+
+    -- form phase
+    screen.level(5)
+    screen.move(74, 64)
+    screen.text(bandmate.form_phase)
+
+    -- last mutation
+    if explorer.last_mutation ~= "" then
+      screen.level(3)
+      local lm = explorer.last_mutation
+      screen.move(128 - screen.text_extents(lm), 64)
+      screen.text(lm)
+    end
   else
     screen.level(3)
-    screen.move(72, 64)
+    screen.move(74, 64)
     screen.text("manual")
-  end
-
-  -- last mutation indicator (subtle)
-  if explorer.active and explorer.last_mutation ~= "" then
-    screen.level(3)
-    screen.move(128 - screen.text_extents(explorer.last_mutation), 64)
-    screen.text(explorer.last_mutation)
   end
 
   screen.update()
