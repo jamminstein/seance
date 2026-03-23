@@ -16,6 +16,7 @@ local lattice_lib = require "lattice"
 local Explorer = include "lib/explorer"
 local Bandmate = include "lib/bandmate"
 local Chaos = include "lib/chaos"
+local Timbre = include "lib/timbre"
 local robot_profile = include "lib/robot_profile"
 
 ----------------------------------------------------------------
@@ -34,7 +35,7 @@ local MOD_DST_FULL = {"warble", "cutoff", "res", "pw", "transpose"}
 
 local PLAY_PARAMS = {"SPIRIT", "FILTER", "CHAOS", "VERB", "PORTA", "FILT ENV", "GATE"}
 local SEQ_PARAMS = {"step", "pitch", "velocity", "gate", "length", "direction", "division", "root", "scale"}
-local ROBOT_PARAMS = {"mindset", "personality"}
+local ROBOT_PARAMS = {"mindset", "personality", "timbre mind", "timbre int."}
 local MAT_ITEM_COUNT = 7 + 4 * 5
 
 ----------------------------------------------------------------
@@ -44,6 +45,7 @@ local MAT_ITEM_COUNT = 7 + 4 * 5
 local explorer = Explorer.new()
 local bandmate = Bandmate.new()
 local chaos = Chaos.new()
+local timbre = Timbre.new()
 
 local robot = {active = false, personality = 1, conductor_beat = 0}
 local frozen = false  -- K3 hold freezes robot
@@ -418,6 +420,10 @@ local function seq_tick()
   -- explorer mutations (skip if frozen)
   if not frozen then
     apply_changes(explorer:step(bandmate:get_weights()))
+    -- timbre engineer: surgical synthesis sculpting
+    if timbre.active then
+      apply_changes(timbre:step(bandmate.energy))
+    end
   end
   chaos:step()
 end
@@ -535,7 +541,7 @@ local function setup_params()
     params:set_action("lfo_shape_"..i, function(v) lfo.shape[i] = v end)
   end
 
-  params:add_group("robot_grp", "ROBOT", 3)
+  params:add_group("robot_grp", "ROBOT", 5)
   params:add_option("robot_active", "robot", {"off", "on"}, 2)
   params:set_action("robot_active", function(v)
     if v == 2 then
@@ -548,6 +554,14 @@ local function setup_params()
   params:set_action("robot_mindset", function(v) bandmate:set_mindset(v) end)
   params:add_option("robot_personality", "personality", robot_profile.PERSONALITIES, 1)
   params:set_action("robot_personality", function(v) robot.personality = v end)
+
+  params:add_group("timbre_grp", "TIMBRE ENGINEER", 3)
+  params:add_option("timbre_active", "timbre engineer", {"off", "on"}, 2)
+  params:set_action("timbre_active", function(v) timbre.active = (v == 2) end)
+  params:add_option("timbre_mindset", "timbre mindset", Timbre.MINDSET_NAMES, 1)
+  params:set_action("timbre_mindset", function(v) timbre:set_mindset(v) end)
+  params:add_control("timbre_intensity", "timbre intensity", controlspec.new(0, 1, 'lin', 0.01, 0.4))
+  params:set_action("timbre_intensity", function(v) timbre.intensity = v end)
 
   params:add_group("midi_grp", "MIDI", 2)
   params:add_number("midi_out_ch", "midi out ch", 1, 16, 1)
@@ -649,12 +663,18 @@ function enc(n, d)
   elseif page == 4 then -- ROBOT
     if n == 2 then sel[4] = util.clamp(sel[4] + d, 1, #ROBOT_PARAMS)
     elseif n == 3 then
-      if sel[4] == 1 then
+      local s = sel[4]
+      if s == 1 then
         local m = util.clamp(bandmate.mindset + d, 1, #Bandmate.MINDSET_NAMES)
         bandmate:set_mindset(m); set_flash(Bandmate.MINDSET_NAMES[m])
-      elseif sel[4] == 2 then
+      elseif s == 2 then
         robot.personality = util.clamp(robot.personality + d, 1, 3)
         set_flash(robot_profile.PERSONALITIES[robot.personality])
+      elseif s == 3 then
+        local tm = util.clamp(timbre.mindset + d, 1, #Timbre.MINDSET_NAMES)
+        timbre:set_mindset(tm); set_flash(Timbre.MINDSET_NAMES[tm])
+      elseif s == 4 then
+        timbre.intensity = util.clamp(timbre.intensity + d * 0.05, 0, 1)
       end
     end
   end
@@ -954,47 +974,103 @@ end
 
 local function draw_robot()
   if not robot.active then
-    screen.level(6); screen.move(14, 28); screen.text("the spirits are quiet")
-    screen.level(3); screen.move(14, 40); screen.text("K2+K3 to begin the seance")
-    if snapshot then
-      screen.level(4); screen.move(14, 52); screen.text("snapshot saved")
-    end
+    screen.level(6); screen.move(14, 24); screen.text("the spirits are quiet")
+    screen.level(3); screen.move(14, 36); screen.text("K2+K3 to begin the seance")
+    if snapshot then screen.level(4); screen.move(14, 48); screen.text("snapshot saved") end
     return
   end
 
   local s = sel[4]
+  local bw = 40 -- bar width for meters
 
-  -- mindset (big)
-  screen.level(s == 1 and 15 or 10); screen.move(2, 18)
-  screen.text((s == 1 and "> " or "  ") .. Bandmate.MINDSET_NAMES[bandmate.mindset])
+  -- ── ROW 1: BANDMATE (mindset + personality) ──
+  screen.level(s == 1 and 15 or 8); screen.move(2, 16)
+  screen.text((s == 1 and ">" or " ") .. Bandmate.MINDSET_NAMES[bandmate.mindset])
+  screen.level(s == 2 and 15 or 5); screen.move(80, 16)
+  screen.text((s == 2 and ">" or " ") .. robot_profile.PERSONALITIES[robot.personality])
 
-  -- personality
-  screen.level(s == 2 and 15 or 6); screen.move(2, 27)
-  screen.text((s == 2 and "> " or "  ") .. robot_profile.PERSONALITIES[robot.personality])
+  -- ── ROW 2: TIMBRE ENGINEER ──
+  screen.level(s == 3 and 15 or 7); screen.move(2, 24)
+  screen.text((s == 3 and ">" or " ") .. Timbre.MINDSET_NAMES[timbre.mindset])
+  -- timbre intensity bar
+  screen.level(s == 4 and 15 or 5); screen.move(78, 24); screen.text((s == 4 and ">" or " "))
+  screen.level(2); screen.rect(86, 19, bw, 4); screen.fill()
+  screen.level(s == 4 and 12 or 7)
+  screen.rect(86, 19, math.floor(timbre.intensity * bw), 4); screen.fill()
 
-  -- phase + intensity
-  screen.level(10); screen.move(2, 37)
-  screen.text(Explorer.PHASE_NAMES[explorer.phase])
-  screen.level(2); screen.rect(56, 31, 70, 5); screen.fill()
-  screen.level(frozen and 3 or 12); screen.rect(56, 31, math.floor(explorer.intensity * 70), 5); screen.fill()
+  -- ── ROW 3: EXPLORER (phase + intensity) ──
+  local pn = Explorer.PHASE_NAMES[explorer.phase]
+  screen.level(10); screen.move(2, 32); screen.text(pn)
+  -- intensity bar
+  screen.level(2); screen.rect(56, 27, 70, 4); screen.fill()
+  screen.level(frozen and 3 or ({6, 9, 15, 8})[explorer.phase] or 8)
+  screen.rect(56, 27, math.floor(explorer.intensity * 70), 4); screen.fill()
 
-  -- breathing + energy
-  screen.level(6); screen.move(2, 46)
-  screen.text(bandmate.breath_phase)
-  screen.level(2); screen.rect(56, 40, 70, 5); screen.fill()
-  local br_col = bandmate.breath_phase == "silence" and 2 or (bandmate.breath_phase == "build" and 10 or 7)
-  screen.level(br_col); screen.rect(56, 40, math.floor(bandmate.energy * 70), 5); screen.fill()
+  -- ── ROW 4: BREATHING (state + energy) ──
+  local bp = bandmate.breath_phase
+  local bp_char = bp == "play" and "~" or (bp == "fade" and "\\" or (bp == "silence" and "_" or "/"))
+  screen.level(5); screen.move(2, 39)
+  screen.text("breath " .. bp_char .. " " .. bp)
+  screen.level(2); screen.rect(72, 34, 54, 4); screen.fill()
+  local br_lv = bp == "silence" and 2 or (bp == "build" and 10 or (bp == "play" and 7 or 4))
+  screen.level(br_lv); screen.rect(72, 34, math.floor(bandmate.energy * 54), 4); screen.fill()
 
-  -- form + chaos
-  screen.level(5); screen.move(2, 55)
-  screen.text("form: " .. bandmate.form_phase)
-  screen.move(70, 55); screen.text(string.format("chaos %.2f", chaos.coeff_x))
+  -- ── ROW 5: FORM + CHAOS ──
+  screen.level(6); screen.move(2, 47)
+  screen.text("form:" .. bandmate.form_phase)
+  -- chaos: 4 mini dots showing polynomial outputs
+  screen.move(68, 47); screen.text("chaos")
+  for c = 1, 4 do
+    local cv = chaos:get(c)
+    screen.level(math.floor(cv * 12) + 2)
+    screen.rect(94 + (c - 1) * 9, 42, 7, 4); screen.fill()
+  end
 
-  -- bottom: mutation + bar + snapshot hint
-  screen.level(3); screen.move(2, 64)
-  screen.text(explorer.last_mutation ~= "" and explorer.last_mutation or "")
-  screen.move(50, 64); screen.text("bar " .. math.floor(robot.conductor_beat / 4))
-  if snapshot then screen.level(4); screen.move(90, 64); screen.text("K3=snap") end
+  -- ── ROW 6: TIMBRE DETAIL ──
+  screen.level(4); screen.move(2, 55)
+  if timbre.active then
+    -- show what the timbre engineer is doing
+    local detail = timbre.last_action
+    if timbre.mindset == 3 and timbre.building then
+      -- provocateur: show tension bar
+      screen.text("tension")
+      screen.level(2); screen.rect(40, 50, 50, 3); screen.fill()
+      screen.level(math.floor(timbre.tension * 12) + 3)
+      screen.rect(40, 50, math.floor(timbre.tension * 50), 3); screen.fill()
+      screen.level(6); screen.move(94, 55); screen.text(detail)
+    elseif timbre.mindset == 5 then
+      -- weaver: show counterpoint wave
+      screen.text("weave")
+      local wave = math.sin(timbre.weave_phase)
+      for wx = 0, 40 do
+        local wy = math.sin(timbre.weave_phase + wx * 0.15) * 2
+        screen.level(math.floor(math.abs(wy) * 4) + 2)
+        screen.pixel(42 + wx, 52 + math.floor(wy))
+        screen.fill()
+      end
+      screen.level(4); screen.move(88, 55); screen.text(detail)
+    else
+      screen.text(detail ~= "" and detail or "listening")
+      -- show focus param for sculptor
+      if timbre.mindset == 1 and timbre.focus <= #Timbre.TARGETS then
+        screen.level(3); screen.move(60, 55)
+        screen.text("@ " .. Timbre.TARGETS[timbre.focus].name)
+      end
+    end
+  else
+    screen.level(2); screen.text("timbre engineer off")
+  end
+
+  -- ── BOTTOM: mutations + bar ──
+  screen.level(1); screen.move(0, 57); screen.line(128, 57); screen.stroke()
+  screen.level(4); screen.move(2, 64)
+  -- show last mutations from explorer and timbre side by side
+  local ex_m = explorer.last_mutation ~= "" and explorer.last_mutation or ""
+  local ti_m = timbre.last_action ~= "" and timbre.last_action or ""
+  screen.text(ex_m)
+  screen.level(3); screen.move(50, 64); screen.text(ti_m)
+  screen.move(90, 64); screen.text("bar " .. math.floor(robot.conductor_beat / 4))
+  if snapshot then screen.level(5); screen.move(118, 64); screen.text("S") end
 end
 
 function redraw()
