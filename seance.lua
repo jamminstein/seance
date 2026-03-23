@@ -580,8 +580,8 @@ function enc(n, d)
 
   elseif page == 2 then -- SEQ
     if shift then
-      if n == 2 then params:delta("seq_root", d)
-      elseif n == 3 then params:delta("seq_scale", d) end
+      if n == 2 then params:delta("seq_scale", d)
+      elseif n == 3 then params:delta("seq_division", d) end
     else
       if n == 2 then
         local len = params:get("seq_length")
@@ -595,8 +595,19 @@ function enc(n, d)
       if shift then mat_cursor[1] = util.clamp(mat_cursor[1] + d, 1, 4)
       else mat_cursor[2] = util.clamp(mat_cursor[2] + d, 1, 5) end
     elseif n == 3 then
-      matrix[mat_cursor[1]][mat_cursor[2]] = util.clamp(
-        matrix[mat_cursor[1]][mat_cursor[2]] + d * 0.05, -1, 1)
+      if shift and mat_cursor[1] <= 3 then
+        -- shift+E3 on LFO row: tweak that LFO's rate
+        local which = mat_cursor[1]
+        lfo.rate[which] = util.clamp(lfo.rate[which] + d * 0.1, 0.01, 20)
+        params:set("lfo_rate_" .. which, lfo.rate[which])
+      elseif shift and mat_cursor[1] == 4 then
+        -- shift+E3 on S&H row: tweak chaos coefficient
+        chaos:drift(d * 0.02)
+      else
+        -- normal: set routing amount
+        matrix[mat_cursor[1]][mat_cursor[2]] = util.clamp(
+          matrix[mat_cursor[1]][mat_cursor[2]] + d * 0.05, -1, 1)
+      end
     end
 
   elseif page == 4 then -- ROBOT
@@ -664,7 +675,22 @@ function key(n, z)
       end
     else
       k3_held = false; shift = false
-      if not k2_held then seq_regenerate() end
+      if not k2_held then
+        if page == 3 and mat_cursor[1] <= 3 then
+          -- MATRIX page + LFO row: cycle LFO shape
+          local which = mat_cursor[1]
+          lfo.shape[which] = (lfo.shape[which] % 4) + 1
+          params:set("lfo_shape_" .. which, lfo.shape[which])
+          set_flash("LFO" .. which .. " " .. SHAPE_NAMES[lfo.shape[which]])
+        elseif page == 2 then
+          -- SEQ page: cycle direction
+          seq.dir = (seq.dir % 4) + 1
+          params:set("seq_direction", seq.dir)
+          set_flash("dir " .. DIR_NAMES[seq.dir])
+        else
+          seq_regenerate()
+        end
+      end
     end
   end
 end
@@ -829,15 +855,23 @@ local function draw_seq()
     end
   end
 
-  -- info
-  screen.level(6); screen.move(2, 56); screen.text(DIR_NAMES[seq.dir])
-  screen.move(18, 56); screen.text("len " .. len)
-  screen.move(52, 56); screen.text(DIV_NAMES[params:get("seq_division")])
-  screen.level(4); screen.move(2, 64)
+  -- info line 1: direction, length, division
+  screen.level(8); screen.move(2, 56); screen.text(DIR_NAMES[seq.dir])
+  screen.level(6); screen.move(18, 56); screen.text("len " .. len)
+  screen.move(48, 56); screen.text(DIV_NAMES[params:get("seq_division")])
+  -- active step count
+  local active_count = 0
+  for i = 1, len do if seq.data[i].active then active_count = active_count + 1 end end
+  screen.move(80, 56); screen.text(active_count .. "/" .. len .. " on")
+
+  -- info line 2: root, scale
+  screen.level(5); screen.move(2, 64)
   screen.text(musicutil.note_num_to_name(params:get("seq_root"), true))
-  screen.move(24, 64)
+  screen.move(22, 64)
   local sn = musicutil.SCALES[params:get("seq_scale")].name
-  screen.text(#sn > 18 and string.sub(sn, 1, 17) .. "." or sn)
+  screen.text(#sn > 14 and string.sub(sn, 1, 13) .. "." or sn)
+  -- hint
+  screen.level(3); screen.move(88, 64); screen.text("K3=dir")
 end
 
 -- PAGE 3: MATRIX — modulation routing
@@ -866,10 +900,21 @@ local function draw_matrix()
       else screen.pixel(x + 2, y - 2); screen.fill() end
     end
   end
-  screen.level(7); screen.move(2, 64)
-  screen.text(MOD_SRC[mat_cursor[1]] .. " > " .. MOD_DST_FULL[mat_cursor[2]])
-  screen.level(12); screen.move(108, 64)
+  -- bottom info: routing value + LFO details
+  screen.level(7); screen.move(2, 58)
+  screen.text(MOD_SRC[mat_cursor[1]] .. ">" .. MOD_DST_FULL[mat_cursor[2]])
+  screen.level(12); screen.move(86, 58)
   screen.text(string.format("%+.2f", matrix[mat_cursor[1]][mat_cursor[2]]))
+
+  -- show LFO rate/shape for selected source (or chaos coeff for S&H)
+  screen.level(5); screen.move(2, 64)
+  if mat_cursor[1] <= 3 then
+    local i = mat_cursor[1]
+    screen.text(string.format("%s %.2fhz  K3=shape  shf+E3=rate",
+      SHAPE_NAMES[lfo.shape[i]], lfo.rate[i]))
+  else
+    screen.text(string.format("chaos x=%.2f  shf+E3=drift", chaos.coeff_x))
+  end
 end
 
 -- PAGE 4: ROBOT — full autonomous status
