@@ -525,7 +525,7 @@ local function setup_params()
   params:set_action("moog_porta", function(v) engine.moog_porta(v) end)
   params:add_control("moog_pw", "pulse width", controlspec.new(0.05, 0.95, 'lin', 0.01, 0.5))
   params:set_action("moog_pw", function(v) engine.moog_pw(v) end)
-  params:add_control("moog_f_env", "filter env amt", controlspec.new(0, 8000, 'lin', 1, 2000, "hz"))
+  params:add_control("moog_f_env", "filter env amt", controlspec.new(0, 8000, 'lin', 0, 2000, "hz"))
   params:set_action("moog_f_env", function(v) engine.moog_f_env(v) end)
   params:add_control("moog_osc1", "osc 1 (saw)", controlspec.new(0, 1, 'lin', 0.01, 1.0))
   params:set_action("moog_osc1", function() engine.moog_osc_mix(params:get("moog_osc1"), params:get("moog_osc2"), params:get("moog_osc3")) end)
@@ -650,7 +650,9 @@ function enc(n, d)
       elseif s == 3 then macro.chaos = util.clamp(macro.chaos + d * 0.02, 0, 1); apply_chaos_macro()
       elseif s == 4 then params:delta("verb_room", d)
       elseif s == 5 then params:delta("moog_porta", d)
-      elseif s == 6 then params:delta("moog_f_env", d * 50)
+      elseif s == 6 then
+        local fenv = params:get("moog_f_env") + d * 100
+        params:set("moog_f_env", util.clamp(fenv, 0, 8000))
       elseif s == 7 then params:delta("seq_gate", d) end
     end
 
